@@ -1,0 +1,13 @@
+[Unit]
+Description=DomainRadar – Webseiten lesen und einordnen
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=domainradar
+Group=domainradar
+WorkingDirectory=/opt/domainradar
+EnvironmentFile=/opt/domainradar/.env
+ExecStart=/opt/domainradar/venv/bin/python -m domainradar.enricher
+Nice=15

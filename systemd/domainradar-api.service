@@ -1,0 +1,30 @@
+[Unit]
+Description=DomainRadar – Web-API und Oberfläche
+Documentation=https://github.com/HatchetMan111/DomainRadar-Proxmox
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=domainradar
+Group=domainradar
+WorkingDirectory=/opt/domainradar
+EnvironmentFile=/opt/domainradar/.env
+ExecStart=/opt/domainradar/venv/bin/python -m uvicorn domainradar.asgi:app --host 0.0.0.0 --port 8477
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+# Härtung: die App liest nur ihre eigene Datenbank und schreibt ins Log.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/domainradar/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

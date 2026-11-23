@@ -1,0 +1,12 @@
+[Unit]
+Description=DomainRadar – Webseiten lesen (alle 10 Minuten)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+AccuracySec=15s
+Persistent=true
+Unit=domainradar-enrich.service
+
+[Install]
+WantedBy=timers.target

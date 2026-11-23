@@ -1,0 +1,10 @@
+[Unit]
+Description=DomainRadar – Klassifikation (täglich 03:00)
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+Unit=domainradar-classify.service
+
+[Install]
+WantedBy=timers.target

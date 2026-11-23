@@ -1,0 +1,10 @@
+[Unit]
+Description=DomainRadar – Änderungsreport (montags 05:00)
+
+[Timer]
+OnCalendar=Mon *-*-* 05:00:00
+Persistent=true
+Unit=domainradar-changes.service
+
+[Install]
+WantedBy=timers.target
