@@ -17,12 +17,12 @@ cd "$ROOT"
 PASS=0
 FAIL=0
 if [ -t 1 ]; then
-  G=$'\033[32m'; R=$'\033[31m'; N=$'\033[0m'
+  C_G=$'\033[32m'; C_R=$'\033[31m'; C_N=$'\033[0m'
 else
-  G=""; R=""; N=""
+  C_G=""; C_R=""; C_N=""
 fi
-ok()   { echo "  ${G}✓${N} $*"; PASS=$((PASS+1)); }
-bad()  { echo "  ${R}✗${N} $*"; FAIL=$((FAIL+1)); }
+ok()   { echo "  ${C_G}✓${C_N} $*"; PASS=$((PASS+1)); }
+bad()  { echo "  ${C_R}✗${C_N} $*"; FAIL=$((FAIL+1)); }
 head1(){ echo; echo "== $* =="; }
 
 echo "DomainRadar Harness"
@@ -106,13 +106,13 @@ else
   bad "CT-Logs nicht erreichbar"
 fi
 
-N=$(python3 -I -c "
+NDOM=$(python3 -I -c "
 import sqlite3
 try:
     c=sqlite3.connect('file:$DB?mode=ro',uri=True); print(c.execute('select count(*) from domains').fetchone()[0])
 except Exception: print(0)
 ")
-if [ "${N:-0}" -gt 0 ]; then ok "$N Domains in der Datenbank"; else bad "keine Domains gesammelt"; fi
+if [ "${NDOM:-0}" -gt 0 ]; then ok "$NDOM Domains in der Datenbank"; else bad "keine Domains gesammelt"; fi
 
 if PYTHONPATH=src python3 -m domainradar.enricher --db "$DB" --limit 10 >/dev/null 2>&1; then
   ok "Enricher lief durch"
@@ -169,10 +169,10 @@ if start_api; then
   code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 http://127.0.0.1:8479/)
   [ "$code" = "200" ] && ok "Web-UI nach Neustart → 200" || bad "Web-UI nach Neustart → $code"
   total=$(curl -s -m 4 http://127.0.0.1:8479/api/stats | python3 -c "import json,sys;print(json.load(sys.stdin)['total_domains'])" 2>/dev/null)
-  if [ "${total:-0}" -ge "${N:-0}" ] && [ "${total:-0}" -gt 0 ]; then
+  if [ "${total:-0}" -ge "${NDOM:-0}" ] && [ "${total:-0}" -gt 0 ]; then
     ok "Daten über Neustart erhalten ($total Domains)"
   else
-    bad "Daten nach Neustart verloren (erwartet $N, ist ${total:-0})"
+    bad "Daten nach Neustart verloren (erwartet $NDOM, ist ${total:-0})"
   fi
 else
   bad "API nach Neustart nicht erreichbar"
@@ -184,9 +184,9 @@ echo
 echo "-----------------------------------------"
 echo " bestanden: $PASS   fehlgeschlagen: $FAIL"
 if [ "$FAIL" -eq 0 ]; then
-  echo " ${G}Alle Prüfungen grün.${N}"
+  echo " ${C_G}Alle Prüfungen grün.${C_N}"
   exit 0
 else
-  echo " ${R}Es gibt Fehlschläge.${N}"
+  echo " ${C_R}Es gibt Fehlschläge.${C_N}"
   exit 1
 fi
