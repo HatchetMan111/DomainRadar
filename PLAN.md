@@ -528,3 +528,37 @@ gecacht, nicht weiterveröffentlicht.
 - **CT-Latenz** ist ungeklärt: Wie lange nach der Registrierung erscheint das erste
   Zertifikat? Bei Let's Encrypt mit Auto-SSL Minuten, bei manueller Einrichtung nie.
   Phase 0 erfasst `not_before` und kann die Verteilung zeigen.
+
+## 12. Erkenntnisse aus dem E2E-Betrieb (2026-11-23)
+
+Diese Punkte standen nicht im Plan und sind erst durch den Lauf gegen echte,
+frisch registrierte Domains aufgefallen:
+
+| Beobachtung | Ursache | Behebung |
+|---|---|---|
+| `tlz.de`, `harzkurier.de` als geparkt erkannt | Marker `undef` traf `class="… undefined"` in der Navigation | Marker nur noch gegen sichtbaren Text, `PARKING_MARKERS_TEXTONLY` |
+| `luckysrv.de`, `supersrv.de` nicht als geparkt erkannt | domaindiscount24-Muster („Domainpark") unbekannt | Marker ergänzt, Testfall dokumentiert |
+| `cittasana.de` („KI Automatisierung") → `mobility` | Keyword `auto` matchte in „Automatisierung" | Wort­grenzen via Regex, `auto` nur als ganzes Wort |
+| `napawebagentur.de` → `other` | `webagentur` fehlte in der Keyword-Liste | `services` ergänzt |
+| HTTP 401 als „geparkt" gemeldet | 401 ist eine Zugangssperre, kein Parking | 401/403 als Fehler klassifiziert, nicht als Parking |
+| `xn--…`-Domains unleserlich | Punycode in der Anzeige | `display_name()` + Tests inkl. Roundtrip |
+| API beim Import nicht testbar | `app = create_app()` beim Modulimport | `asgi.py` als eigener Einstieg, `create_app()` lazy |
+
+**Zur IDN-Darstellung:** `xn--fassnachtskostme-wzb.de` sieht aus, als wäre ein
+Suffix verloren — tatsächlich ist `-wzb` Teil der Punycode-Kodierung und
+dekodiert korrekt zu `fassnachtskostüme.de`. Das ist durch Roundtrip-Tests
+belegt, nicht geraten.
+
+**Zum Harness:** Eine Variablenkollision (`N` als Farbe *und* als Zähler) führte
+zu `✓3` statt `✓`. Das ist kein Kosmetikfehler, sondern der Hinweis, dass der
+Harness selbst getestet werden muss — deshalb sind die Farben jetzt `C_G/C_R/C_N`
+und der Zähler `NDOM`.
+
+## 13. Was offen ist
+
+| Punkt | Grund |
+|---|---|
+| **Echter Ollama-Lauf** | Auf dem Host läuft kein Ollama. Die Kaskade ist mit Attrappen und echten Provider-Antworten getestet, aber nicht gegen ein echtes Modell. `OLLAMA=1` beim Installer bringt es mit. |
+| **OpenRouter-Key** | `~/.secrets/omnirouter-key` ist kein OpenRouter-Key (Beginn nicht `sk-or-`). Ohne Key bleibt Stufe 2 inaktiv. |
+| **Installation auf Proxmox** | Der Installer ist syntaktisch geprüft und im Harness gemockt, aber noch nicht auf einem echten Host gelaufen. Der nächste Schritt wäre genau das. |
+| **CT-Latenz** | Wie schnell erscheint ein Zertifikat nach der Registrierung? Die `spike.py`-Messung erfasst das, ist aber noch nicht über 24 h gelaufen. |
