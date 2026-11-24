@@ -437,6 +437,23 @@ else
 fi
 rm -f "$MOCK_STATE.missing"
 
+# ── 6d. Frisch-Install: Zielverzeichnis wird vor pct push angelegt ──────────
+echo "== Zielverzeichnis vor pct push (Frischinstall) =="
+: > "$MOCK_STATE"
+bash "$INSTALLER" --id 250 >/dev/null 2>&1 || true
+if grep -q "mkdir -p /root/domainradar-src" "$MOCK_STATE"; then
+  ok "mkdir -p /root/domainradar-src wird im Container ausgeführt"
+else
+  bad "mkdir -p /root/domainradar-src fehlt im Zustandslog"
+fi
+LN_MKDIR="$(grep -n 'mkdir -p /root/domainradar-src' "$MOCK_STATE" | head -1 | cut -d: -f1)"
+LN_PUSH="$(grep -n 'pct push' "$MOCK_STATE" | head -1 | cut -d: -f1)"
+if [ -n "$LN_MKDIR" ] && [ -n "$LN_PUSH" ] && [ "$LN_MKDIR" -lt "$LN_PUSH" ]; then
+  ok "mkdir steht vor dem ersten pct push"
+else
+  bad "mkdir steht nicht vor dem ersten pct push (mkdir=$LN_MKDIR push=$LN_PUSH)"
+fi
+
 echo
 echo "-----------------------------------------"
 echo " bestanden: $PASS   fehlgeschlagen: $FAIL"
