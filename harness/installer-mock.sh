@@ -437,8 +437,8 @@ else
 fi
 rm -f "$MOCK_STATE.missing"
 
-# ── 6d. Frisch-Install: Zielverzeichnis wird vor pct push angelegt ──────────
-echo "== Zielverzeichnis vor pct push (Frischinstall) =="
+# ── 6d. Frisch-Install: Payload als Tarball pushen + im Container entpacken ───
+echo "== Payload-Transfer per Tarball (Frischinstall) =="
 : > "$MOCK_STATE"
 bash "$INSTALLER" --id 250 >/dev/null 2>&1 || true
 if grep -q "mkdir -p /root/domainradar-src" "$MOCK_STATE"; then
@@ -452,6 +452,16 @@ if [ -n "$LN_MKDIR" ] && [ -n "$LN_PUSH" ] && [ "$LN_MKDIR" -lt "$LN_PUSH" ]; th
   ok "mkdir steht vor dem ersten pct push"
 else
   bad "mkdir steht nicht vor dem ersten pct push (mkdir=$LN_MKDIR push=$LN_PUSH)"
+fi
+if grep -q "domainradar-payload.tar.gz" "$MOCK_STATE" && grep -q "tar -xzf /root/domainradar-payload.tar.gz" "$MOCK_STATE"; then
+  ok "Payload wird als Tarball gepusht und im Container entpackt (kein Verzeichnis-pct-push)"
+else
+  bad "Tarball-Payload/-Entpacken fehlt im Zustandslog"
+fi
+if grep -qE "pct push 250 .* /root/domainradar-src/(src|web|systemd)$" "$MOCK_STATE"; then
+  bad "Verzeichnis-Push auf /root/domainradar-src/<dir> ist noch aktiv"
+else
+  ok "kein pct push von Verzeichnissen mehr"
 fi
 
 echo
