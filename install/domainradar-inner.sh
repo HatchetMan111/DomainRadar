@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # DomainRadar – inneres Installationsskript, läuft im LXC.
-# Versions-Marker: DOMAINRADAR-INNER-VERSION 3
+# Versions-Marker: DOMAINRADAR-INNER-VERSION 4
 set -Eeuo pipefail
 
 APP_DIR="${APP_DIR:-/opt/domainradar}"
@@ -77,6 +77,7 @@ cat > "$APP_DIR/.env" <<EOF
 DOMAINRADAR_DB=$APP_DIR/data/domainradar.db
 DOMAINRADAR_PORT=$APP_PORT
 DOMAINRADAR_WEB=$APP_DIR/web/dist
+DOMAINRADAR_HOST=${DOMAINRADAR_HOST:-0.0.0.0}
 LLM_CHAIN=${LLM_CHAIN:-ollama,openrouter}
 OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://127.0.0.1:11434/v1}
 OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:3b}
