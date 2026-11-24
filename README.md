@@ -176,7 +176,7 @@ Alle mit `Persistent=true`, verpasste Läufe werden nachgeholt.
 **Radar** — die Beobachtungsdatenbank.
 
 **Einstellungen** — LLM-Provider, API-Keys, Erfassungslimits, Zielkategorien.
-Mit Verbindungstest pro Provider.
+Mit Verbindungstest pro Provider. Die Zielkategorien (kommagetrennt, z. B. `software,energy,smart-home`) bestimmen, in welche Branchen der Klassifikator neue Domains einordnet.
 
 Innerhalb des Radars zwei Ansichten:
 
@@ -303,6 +303,10 @@ pct exec <CT-ID> -- journalctl -u domainradar-collect -n 50 --no-pager
 
 # Manuell eine Stufe starten
 pct exec <CT-ID> -- bash -c 'cd /opt/domainradar && set -a && . ./.env && set +a && venv/bin/python -m domainradar.collector -v'
+
+Geht auch ohne Konsole: Button **„⟳ Jetzt abrufen“** im Radar startet die
+Pipeline (collect → enrich → classify → changes) im Hintergrund.
+API: `POST /api/run/{collect|enrich|classify|changes|all}`, Status: `GET /api/runs`.
 ```
 
 Der Installer gibt bei Fehlern immer die **vollständige Fehlkette** aus: Exit-Code,
