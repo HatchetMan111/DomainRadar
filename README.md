@@ -180,7 +180,7 @@ Mit Verbindungstest pro Provider. Die Zielkategorien (kommagetrennt, z. B. `soft
 
 Innerhalb des Radars zwei Ansichten:
 
-**Markt** — alle beobachteten Domains, nach Kategorie und Zeit filterbar.
+**Markt** — alle beobachteten Domains, nach Kategorie und Zeit filterbar. Über die Chips **24 h / 7 Tage / 30 Tage / alle** siehst du nur die wirklich neuen. Eine einzelne Adresse prüfst du über **„Adresse direkt prüfen“** – die Domain wird sofort abgerufen und eingeordnet (`POST /api/check`).
 
 **Leads** — nur Domains mit erkennbarem Produkt und Betreiber, inklusive
 Firmenname, Rechtsform und einem erklärbaren Score:
