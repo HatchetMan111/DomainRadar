@@ -19,6 +19,7 @@ import secrets
 import shlex
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -290,6 +291,43 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
         (run_dir / f"run-{label}.pid").write_text(str(proc.pid))
         log.info("Pipeline manuell gestartet (%s, PID %d)", cmd, proc.pid)
         return {"ok": True, "stage": label, "pid": proc.pid, "log": str(log_file)}
+
+    # ---------- Direkt-Prüfung einer Domain ----------
+
+    @app.post("/api/check")
+    def check_domain(request: Request, payload: dict):
+        """Domain direkt prüfen: in DB aufnehmen, Abruf + Klassifikation im Hintergrund."""
+        _check_auth(request)
+        from . import classifier as classifier_mod
+        from . import enricher
+        from .domains import DomainFilter
+
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="JSON-Objekt erwartet")
+        raw = str(payload.get("domain", "")).strip()
+        domain = DomainFilter((".de",)).accept(raw)
+        if not domain:
+            raise HTTPException(
+                status_code=422,
+                detail="Ungültige Domain – nur .de (z. B. muster.de)",
+            )
+        if db.get_domain(domain) is None:
+            # Manueller Eintrag: first_seen = jetzt, Quelle "manual"
+            db.insert_domains([{"domain": domain, "log_name": "manual"}])
+
+        def _job() -> None:
+            try:
+                enricher.enrich_one(db, domain)
+            except Exception:
+                log.exception("Direkt-Abruf fehlgeschlagen: %s", domain)
+            try:
+                classifier_mod.classify_one(db, domain)
+            except Exception:
+                log.exception("Direkt-Klassifikation fehlgeschlagen: %s", domain)
+
+        threading.Thread(target=_job, daemon=True, name=f"check-{domain}").start()
+        return {"ok": True, "domain": domain, "status": "queued",
+                "detail": "Abruf + Klassifikation laufen im Hintergrund"}
 
     # ---------- Feed & Export ----------
 
