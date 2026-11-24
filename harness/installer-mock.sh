@@ -75,6 +75,11 @@ case "$cmd" in
     fi
     ;;
   status)
+    # Realistisches Verhalten: exit 2, sobald der Container gestoppt ist
+    if [ -f "${MOCK_STATE}.stopped" ]; then
+      echo "status: stopped"
+      exit 2
+    fi
     echo "status: running"
     ;;
   config)
@@ -126,6 +131,10 @@ case "$cmd" in
         exit 0
         ;;
     esac
+    ;;
+  start)
+    rm -f "${MOCK_STATE}.stopped"
+    exit 0
     ;;
   push)
     exit 0
@@ -383,6 +392,28 @@ if echo "$OUT_NO" | grep -q "Kein Container"; then
 else
   bad "--status ohne Container: $OUT_NO"
 fi
+
+# ── 6b. Gestoppter Container: --update startet ihn (Regression pipefail) ────
+echo "== Update bei gestopptem Container =="
+: > "$MOCK_STATE"
+: > "$MOCK_STATE.stopped"
+OUT_SU="$(MOCK_HAVE_CT=1 bash "$INSTALLER" --update 2>&1 || true)"
+if echo "$OUT_SU" | grep -q "starte ihn"; then
+  ok "--update startet gestoppten Container automatisch"
+else
+  bad "--update startet gestoppten Container nicht: $OUT_SU"
+fi
+if grep -q "pct start 250" "$MOCK_STATE"; then
+  ok "pct start 250 wurde aufgerufen"
+else
+  bad "pct start 250 fehlt im Zustandslog"
+fi
+if echo "$OUT_SU" | grep -q "Installationsfehler"; then
+  bad "--update mit gestopptem CT bricht mit Installationsfehler ab: $OUT_SU"
+else
+  ok "--update mit gestopptem CT läuft fehlerfrei durch (kein ERR-Trap)"
+fi
+rm -f "$MOCK_STATE.stopped"
 
 echo
 echo "-----------------------------------------"
