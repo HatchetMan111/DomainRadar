@@ -7,12 +7,10 @@ Folgt Certificate-Transparency-Logs inkrementell:
             └─ SANs filtern, auf Basis-Domains reduzieren, einfügen
                   └─ tree_size NACH erfolgreichem Commit fortschreiben
 
-Der High-Water-Mark wird erst nach dem Commit geschrieben. Bricht ein Lauf
-mitten im Chunk ab, liest der nächste Lauf genau dort weiter – kein
-Datenverlust, keine Dublette (Unique-Index auf `certs(log_id, cert_index)`).
-
-Catch-up: Der Collector ist nicht auf "höchstens N Einträge" beschränkt. Wer
-eine Woche weg war, holt die Woche nach. Das kostet Zeit, aber keine Daten.
+Verbesserungen in v0.2:
+- Batch-Insert: Zertifikate werden pro Chunk gesammelt und mit einem
+  einzigen record_certs()-Aufruf geschrieben (statt eine Transaktion pro Cert).
+- Domains werden pro Chunk gesammelt und mit einem insert_domains()-Aufruf geschrieben.
 """
 
 from __future__ import annotations
@@ -31,15 +29,14 @@ from .domains import DomainFilter
 
 log = logging.getLogger("domainradar.collector")
 
-# Pro-Lauf-Zähler. Bewusst ein Modul-Dict statt Rückgabewert-Kette: so kann
-# `collect_log` einzeln getestet werden und die Statistik trotzdem stimmen.
 collector_stats = {"certs_read": 0, "certs_new": 0, "certs_with_sans": 0}
+
+# Chunk-Größe für Batch-Commits: alle N gelesenen Einträge committen
+COMMIT_CHUNK_SIZE = 500
 
 
 @dataclass
 class CollectResult:
-    """Ergebnis eines Sammellaufs – für Logs und Tests."""
-
     logs_seen: int = 0
     logs_failed: int = 0
     certs_read: int = 0
@@ -57,31 +54,19 @@ class CollectResult:
 
 
 def _cert_not_before(cert) -> str | None:
-    """not_before als ISO-String (UTC)."""
-    from cryptography import x509
-
     try:
         nb = cert.not_valid_before_utc
-    except AttributeError:  # cryptography < 42
+    except AttributeError:
         nb = cert.not_valid_before
     return nb.replace(microsecond=0).isoformat()
 
 
 def _cert_not_after(cert) -> str | None:
-    from cryptography import x509
-
     try:
         na = cert.not_valid_after_utc
-    except AttributeError:  # cryptography < 42
+    except AttributeError:
         na = cert.not_valid_after
     return na.replace(microsecond=0).isoformat()
-
-
-def _fingerprint(cert) -> str:
-    """SHA256 über das DER – Dedupe über Logs hinweg."""
-    import hashlib
-
-    return hashlib.sha256(cert.public_bytes(__import__("cryptography").hazmat.primitives.serialization.Encoding.DER)).hexdigest()
 
 
 def collect_log(
@@ -115,29 +100,42 @@ def collect_log(
     start = stored_size
     log.info(
         "%s: %d → %d (%d neu)",
-        log_name,
-        stored_size,
-        tree_size,
-        tree_size - stored_size,
+        log_name, stored_size, tree_size, tree_size - stored_size,
     )
 
     read = 0
     with_sans = 0
-    new_domains = 0
     result_certs_new = 0
+    domains_new = 0
     stamp = now_iso()
+
+    # Batch-Puffer: Zertifikate und Domains sammeln, periodisch committen
+    cert_batch: list[tuple] = []
+    domain_batch: list[dict] = []
+
+    def flush_batches() -> tuple[int, int]:
+        """Gesammelte Batches in die DB schreiben. Rückgabe: (certs_new, domains_new)."""
+        nonlocal cert_batch, domain_batch
+        c_new = 0
+        d_new = 0
+        if cert_batch:
+            c_new = db.record_certs(log_id, cert_batch)
+            cert_batch = []
+        if domain_batch:
+            d_new = db.insert_domains(domain_batch)
+            domain_batch = []
+        return c_new, d_new
 
     try:
         for entry in client.iter_entries(start, tree_size):
             certs = list(ctlog.der_certificates(entry.get("extra_data", "")))
+            cert_index = start + read
+            read += 1
+
             if not certs:
-                read += 1  # zählt als gelesener Eintrag, auch ohne Zertifikat
                 if max_entries and read >= max_entries:
                     break
                 continue
-
-            cert_index = start + read
-            read += 1
 
             names: list[str] = []
             not_before = None
@@ -151,20 +149,22 @@ def collect_log(
             if names:
                 with_sans += 1
 
-            sans_json = json.dumps(names)
-            inserted = db.record_certs(
-                log_id,
-                [(log_id, cert_index, not_before, not_after, sans_json, stamp)],
+            # In Batch-Puffer legen (nicht einzeln committen)
+            cert_batch.append(
+                (log_id, cert_index, not_before, not_after, json.dumps(names), stamp)
             )
-            result_certs_new += inserted
 
             bases = domain_filter.accept_many(names)
-            if bases:
-                rows = [
+            for b in sorted(bases):
+                domain_batch.append(
                     {"domain": b, "cert_index": cert_index, "log_name": log_name}
-                    for b in sorted(bases)
-                ]
-                new_domains += db.insert_domains(rows)
+                )
+
+            # Periodisch committen (alle COMMIT_CHUNK_SIZE Einträge)
+            if read % COMMIT_CHUNK_SIZE == 0:
+                c, d = flush_batches()
+                result_certs_new += c
+                domains_new += d
 
             if max_entries and read >= max_entries:
                 log.info("%s: Limit von %d Einträgen erreicht", log_name, max_entries)
@@ -172,16 +172,25 @@ def collect_log(
             if sleep_between_pages and read % ctlog.PAGE_SIZE == 0:
                 time.sleep(sleep_between_pages)
 
+        # Restliche Batches flushen
+        c, d = flush_batches()
+        result_certs_new += c
+        domains_new += d
+
     except ctlog.CTLogError as exc:
+        # Vor dem Fehlschlag: bereits gelesene Batches sichern
+        c, d = flush_batches()
+        result_certs_new += c
+        domains_new += d
         db.set_log_progress(log_name, stored_size + read, error=str(exc))
         raise
 
-    # Commit des Fortschritts – bewusst nach dem Einfügen.
+    # Fortschritt nach erfolgreichem Commit schreiben
     db.set_log_progress(log_name, start + read)
     collector_stats["certs_read"] += read
     collector_stats["certs_new"] += result_certs_new
     collector_stats["certs_with_sans"] += with_sans
-    return read, new_domains
+    return read, domains_new
 
 
 def run_once(
@@ -215,7 +224,7 @@ def run_once(
             result.logs_failed += 1
             result.errors.append(f"{name}: {exc}")
             log.error("%s fehlgeschlagen: %s", name, exc)
-        except Exception as exc:  # noqa: BLE001 – ein Log darf den Lauf nicht killen
+        except Exception as exc:  # noqa: BLE001
             result.logs_failed += 1
             result.errors.append(f"{name}: {type(exc).__name__}: {exc}")
             log.exception("%s: unerwarteter Fehler", name)
@@ -253,11 +262,7 @@ def main(argv: list[str] | None = None) -> int:
 
     db = Database(args.db)
     try:
-        result = run_once(
-            db,
-            only=args.only,
-            max_entries=args.max_entries,
-        )
+        result = run_once(db, only=args.only, max_entries=args.max_entries)
     finally:
         db.close()
 
