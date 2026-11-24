@@ -1,5 +1,5 @@
-// Schlanker fetch-Wrapper. Die API ist read-only, deshalb gibt es hier kein
-// Retry- und kein Auth-Gerüst – Fehler laufen einfach in den Error-State.
+// Schlanker fetch-Wrapper. Neben read-only GETs gibt es POSTs für Settings
+// und den Pipeline-Trigger – Fehler laufen einfach in den Error-State.
 const BASE = "";
 
 async function getJSON(path) {
@@ -12,8 +12,21 @@ async function getJSON(path) {
   return resp.json();
 }
 
+async function postJSON(path, body) {
+  const resp = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: body === undefined ? "{}" : JSON.stringify(body),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status} für ${path}`);
+  return data;
+}
+
 export const api = {
   stats: () => getJSON("/api/stats"),
+  runs: () => getJSON("/api/runs"),
+  run: (stage) => postJSON(`/api/run/${encodeURIComponent(stage)}`),
   startups: (params = {}) => {
     const qs = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => {
