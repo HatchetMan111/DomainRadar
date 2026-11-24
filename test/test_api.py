@@ -350,3 +350,14 @@ class TestManualRun:
         assert body["ok"] is True
         assert {r["stage"] for r in body["runs"]} == {"collect", "enrich", "classify", "changes"}
         assert all(r["running"] is False for r in body["runs"])
+
+
+class TestCheck:
+    def test_invalid_domain_422(self, client):
+        # .com ist nicht erlaubt – darf weder DB-Eintrag noch Thread erzeugen
+        res = client.post("/api/check", json={"domain": "example.com"})
+        assert res.status_code == 422
+
+    def test_missing_payload_422(self, client):
+        res = client.post("/api/check", json={})
+        assert res.status_code == 422
