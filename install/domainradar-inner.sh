@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # DomainRadar – inneres Installationsskript, läuft im LXC.
-# Versions-Marker: DOMAINRADAR-INNER-VERSION 1
+# Versions-Marker: DOMAINRADAR-INNER-VERSION 2
 set -Eeuo pipefail
 
 APP_DIR="${APP_DIR:-/opt/domainradar}"
@@ -43,6 +43,13 @@ if ! id "$APP_USER" >/dev/null 2>&1; then
 fi
 
 msg_info "App-Dateien nach $APP_DIR"
+# Update-Fall: ältere Installationen können an Stellen, an denen das Repo
+# heute Verzeichnisse hat, noch Einzeldateien liegen haben (z. B. 'systemd'
+# als Datei durch frühere pct-push-Installationen). cp -r bricht daran mit
+# "cannot overwrite non-directory" ab. Deshalb vor dem Kopieren alles ausser
+# den Laufzeitdaten (SQLite-DB in data/, venv) entfernen.
+mkdir -p "$APP_DIR"
+find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name data ! -name venv -exec rm -rf -- {} +
 mkdir -p "$APP_DIR"/{src,web,data}
 cp -r /root/domainradar-src/. "$APP_DIR"/
 rm -rf "$APP_DIR"/.env
