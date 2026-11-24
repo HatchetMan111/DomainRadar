@@ -80,6 +80,26 @@ CATEGORIES = (
 )
 
 
+def categories_from_settings(settings: dict[str, Any]) -> tuple[str, ...]:
+    """Zielkategorien aus den Einstellungen (kommagetrennt), Fallback auf CATEGORIES."""
+    raw = str(settings.get("target_categories", "") or "").strip()
+    if not raw:
+        return CATEGORIES
+    cats = tuple(
+        c.strip().lower().replace(" ", "-")
+        for c in raw.split(",")
+        if c.strip()
+    )
+    return cats or CATEGORIES
+
+
+def system_prompt(categories: tuple[str, ...] = CATEGORIES) -> str:
+    """System-Prompt mit der wirksamen Kategorieliste (Default: CATEGORIES)."""
+    default_line = "Kategorien: " + ", ".join(CATEGORIES) + "."
+    cat_line = "Kategorien: " + ", ".join(categories) + "."
+    return SYSTEM_PROMPT.replace(default_line, cat_line)
+
+
 @dataclass
 class Provider:
     """Ein LLM-Endpunkt im OpenAI-kompatiblen Format."""
@@ -222,10 +242,14 @@ def parse_llm_response(raw: str) -> dict[str, Any]:
     return {"results": [data]}
 
 
-def normalize_result(item: dict[str, Any], domain: str) -> dict[str, Any]:
+def normalize_result(
+    item: dict[str, Any],
+    domain: str,
+    allowed: tuple[str, ...] = CATEGORIES,
+) -> dict[str, Any]:
     """Ein LLM-Ergebnis auf das Schema zwingen, fehlende Felder füllen."""
     category = str(item.get("category", "")).strip().lower()
-    if category not in CATEGORIES:
+    if category not in allowed:
         category = "other"
 
     segment = str(item.get("segment", "")).strip().lower()
@@ -342,6 +366,7 @@ def classify_batch(
     items: list[dict[str, str]],
     chain: list[Provider],
     escalate_below: float = 0.75,
+    categories: tuple[str, ...] = CATEGORIES,
 ) -> tuple[dict[str, dict], str, str]:
     """Ein Batch (max. 10) klassifizieren.
 
@@ -361,6 +386,7 @@ def classify_batch(
             out[item["domain"]] = res
         return out, "deterministic", ""
 
+    sys_prompt = system_prompt(categories)
     prompt = _build_user_prompt(items)
     first_provider = chain[0]
     used = first_provider.name
@@ -368,10 +394,10 @@ def classify_batch(
     stage1_ok = False
 
     try:
-        raw = first_provider.chat(SYSTEM_PROMPT, prompt)
+        raw = first_provider.chat(sys_prompt, prompt)
         parsed = parse_llm_response(raw)
         results = {
-            str(r.get("domain")): normalize_result(r, str(r.get("domain", "")))
+            str(r.get("domain")): normalize_result(r, str(r.get("domain", "")), categories)
             for r in parsed.get("results", [])
             if isinstance(r, dict)
         }
@@ -407,14 +433,14 @@ def classify_batch(
             second.name,
         )
         try:
-            raw = second.chat(SYSTEM_PROMPT, _build_user_prompt(needs_escalation))
+            raw = second.chat(sys_prompt, _build_user_prompt(needs_escalation))
             parsed = parse_llm_response(raw)
             for r in parsed.get("results", []):
                 if not isinstance(r, dict):
                     continue
                 domain = str(r.get("domain", ""))
                 if domain:
-                    normalized = normalize_result(r, domain)
+                    normalized = normalize_result(r, domain, categories)
                     # Bessere Konfidenz gewinnt
                     old = results.get(domain)
                     if old is None or normalized["confidence"] >= old["confidence"]:
@@ -458,6 +484,7 @@ def run_once(
     escalate_below = float(settings.get("llm_escalate_below", 0.75) or 0.75)
     if chain is None:
         chain = chain_from_settings(settings)
+    categories = categories_from_settings(settings)
 
     domains = db.domains_without_classification(limit=batch_size * 10)
 
@@ -481,7 +508,7 @@ def run_once(
             continue
 
         results, provider_name, model = classify_batch(
-            items, chain, escalate_below=escalate_below
+            items, chain, escalate_below=escalate_below, categories=categories
         )
         stats["provider"] = provider_name
         stats["model"] = model
