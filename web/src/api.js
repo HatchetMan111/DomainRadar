@@ -27,6 +27,7 @@ export const api = {
   stats: () => getJSON("/api/stats"),
   runs: () => getJSON("/api/runs"),
   run: (stage) => postJSON(`/api/run/${encodeURIComponent(stage)}`),
+  check: (domain) => postJSON("/api/check", { domain }),
   startups: (params = {}) => {
     const qs = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => {
