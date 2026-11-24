@@ -398,7 +398,8 @@ do_install() {
   # pct push ist bei Verzeichnissen unzuverlaessig (legt das Ziel teils als
   # Datei an, teils bricht es ohne Zielverzeichnis ab). Deshalb deterministisch:
   # ein Tarball pushen und im Container entpacken.
-  pct exec "$ctid" -- mkdir -p /root/domainradar-src || die "Konnte /root/domainradar-src in Container $ctid nicht anlegen"
+  # Staging-Verzeichnis frisch aufbauen: fruehere (evtl. kaputte) Pushes liegen lassen.
+  pct exec "$ctid" -- sh -c 'rm -rf /root/domainradar-src && mkdir -p /root/domainradar-src' || die "Konnte /root/domainradar-src in Container $ctid nicht anlegen"
   tar -czf "$stage/payload.tar.gz" -C "$work" src web systemd requirements.txt || die "Payload-Tarball packen fehlgeschlagen"
   pct push "$ctid" "$stage/payload.tar.gz" /root/domainradar-payload.tar.gz --perms 0644 >/dev/null || die "pct push (payload.tar.gz) nach Container $ctid fehlgeschlagen"
   pct exec "$ctid" -- tar -xzf /root/domainradar-payload.tar.gz -C /root/domainradar-src || die "Entpacken des Payloads in Container $ctid fehlgeschlagen"
