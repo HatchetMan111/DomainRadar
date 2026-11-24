@@ -395,11 +395,14 @@ do_install() {
   tar -xzf "$tarball" -C "$work" --strip-components=1 || die "Entpacken fehlgeschlagen"
   rm -rf "$work/.git"
 
-  pct push "$ctid" "$work/src" /root/domainradar-src/src --perms 0755 >/dev/null
-  pct push "$ctid" "$work/web" /root/domainradar-src/web --perms 0755 >/dev/null
-  pct push "$ctid" "$work/systemd" /root/domainradar-src/systemd --perms 0755 >/dev/null
-  pct push "$ctid" "$work/requirements.txt" /root/domainradar-src/requirements.txt --perms 0644 >/dev/null
-  pct push "$ctid" "$stage/inner.sh" /root/domainradar-inner.sh --perms 0700 >/dev/null
+  # pct push legt fehlende Zielverzeichnisse NICHT selbst an – bei einer
+  # Frischinstallation existiert /root/domainradar-src im Container noch nicht.
+  pct exec "$ctid" -- mkdir -p /root/domainradar-src || die "Konnte /root/domainradar-src in Container $ctid nicht anlegen"
+  pct push "$ctid" "$work/src" /root/domainradar-src/src --perms 0755 >/dev/null || die "pct push (src) nach Container $ctid fehlgeschlagen"
+  pct push "$ctid" "$work/web" /root/domainradar-src/web --perms 0755 >/dev/null || die "pct push (web) nach Container $ctid fehlgeschlagen"
+  pct push "$ctid" "$work/systemd" /root/domainradar-src/systemd --perms 0755 >/dev/null || die "pct push (systemd) nach Container $ctid fehlgeschlagen"
+  pct push "$ctid" "$work/requirements.txt" /root/domainradar-src/requirements.txt --perms 0644 >/dev/null || die "pct push (requirements.txt) nach Container $ctid fehlgeschlagen"
+  pct push "$ctid" "$stage/inner.sh" /root/domainradar-inner.sh --perms 0700 >/dev/null || die "pct push (inner.sh) nach Container $ctid fehlgeschlagen"
 
   msg_info "Führe Installation im Container aus"
   LOG_FILE="${LOG_FILE:-/tmp/domainradar-install.log}"
