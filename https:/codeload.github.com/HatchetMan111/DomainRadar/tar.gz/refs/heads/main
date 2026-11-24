@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# DOMAINRADAR-INNER-VERSION mock
+exit 0

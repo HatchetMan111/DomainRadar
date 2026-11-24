@@ -21,11 +21,12 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DomainRad
 
 | Schritt | Detail |
 |---|---|
-| CT-ID | automatisch die nächste freie (überschreibbar via `CTID=`) |
+| CT-ID | automatisch die nächste freie (`pvesh get /cluster/nextid`, überschreibbar via `--id`) |
 | Hostname | `domainradar` |
 | Template | Debian 13, Architektur-gefiltert, bei Bedarf `pveam download` |
 | Ressourcen | 2 vCPU · 2048 MB RAM · 512 MB Swap · 8 GB Disk |
 | Features | `unprivileged=1`, `nesting=1,keyctl=1`, `onboot=1`, DHCP |
+| Dienste | `domainradar-api` (systemd, `Restart=always`) + 4 Timer |
 | Web-UI | `http://<CT-IP>:8477` |
 | Update | `--update` erkennt den Container am Hostnamen |
 
@@ -235,17 +236,33 @@ vorher sichern, wenn die Beobachtungen gebraucht werden.
 ## 🧪 Testen
 
 ```bash
-bash harness/run.sh
+bash harness/run.sh          # 26 Prüfungen: Pipeline, API, Reboot
+bash harness/installer-mock.sh  # 11 Prüfungen: Installer ohne Proxmox
+PYTHONPATH=src python3 -m pytest test/ -q   # 171 Unit-Tests
 ```
 
-Prüft 22 Punkte: Unit-Tests, Installer-Syntax, shellcheck, Web-Build, Pipeline gegen
-echte CT-Logs, alle API-Endpunkte und den **Reboot-Nachweis** (API neu starten,
-Daten müssen erhalten bleiben).
+### Was tatsächlich geprüft wurde
+
+| Prüfung | Ergebnis |
+|---|---|
+| Unit-Tests | **171 grün** (ctlog, collector, enricher, classifier, config, api) |
+| `harness/run.sh` | **26/26** – inkl. Pipeline gegen echte CT-Logs und Reboot-Nachweis |
+| `harness/installer-mock.sh` | **11/11** – mit `pct`/`pvesh`/`pveam`-Attrappen |
+| `bash -n` + `shellcheck -S warning` | sauber, beide Skripte |
+| Frontend-Build aus frischem Tarball | `npm ci` + `npm run build` → 154 KB JS / 50 KB gzip |
+| `requirements.txt` in frischem venv | fastapi 0.115.6, uvicorn 0.32.1, cryptography 44.0.0 |
+| Wheels für Python 3.13 (Debian 13) | vorhanden für uvloop, httptools, pyyaml, cryptography (abi3) |
+| Repo-URLs nach dem Push | `install/domainradar.sh`, `-inner.sh`, Tarball → je HTTP 200 |
+
+**Der Reboot-Nachweis** ist Teil von `harness/run.sh`: API starten, Prozess beenden,
+neu starten, danach müssen `/` und `/api/health` wieder 200 liefern und die
+Domains noch in der Datenbank stehen.
+
+**Was noch nicht geprüft ist:** der echte Lauf auf einem Proxmox-Host. Der
+Installer ist syntaktisch, per Attrappen und gegen die echten GitHub-URLs geprüft —
+aber `pct create` auf echter Hardware hat er noch nicht gesehen.
 
 ```bash
-# Nur die Unit-Tests
-PYTHONPATH=src python3 -m pytest test/ -q
-
 # Phase-0-Stichprobe: .de-Quote über verteilte CT-Blöcke messen
 PYTHONPATH=src python3 -m domainradar.spike --certs 400 --blocks 5
 ```

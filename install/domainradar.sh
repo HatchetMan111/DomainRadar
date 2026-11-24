@@ -129,6 +129,10 @@ parse_args() {
   if [[ "${0:0:1}" == "-" ]]; then
     args=("$0" "$@")
   fi
+  # Trennzeichen "bash -c ... -- --update" abwerfen: $0 ist dann "--"
+  if [[ "${args[0]:-}" == "--" ]]; then
+    args=("${args[@]:1}")
+  fi
 
   while [[ ${#args[@]} -gt 0 ]]; do
     case "${args[0]}" in

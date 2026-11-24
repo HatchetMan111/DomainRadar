@@ -224,6 +224,23 @@ else
   bad "Unklare Fehlermeldung: $OUT"
 fi
 
+# ── 3b. Beide Aufruf-Formen ─────────────────────────────────────────────────
+echo "== Aufruf-Formen =="
+# bash -c "$(wget ...)" --update  → $0 ist "--update"
+OUT2="$(bash -c "bash \"$INSTALLER\" --update" 2>&1 || true)"
+if echo "$OUT2" | grep -q "Unbekannte Option"; then
+  bad "Form '--update' (als \$0) wird nicht erkannt"
+else
+  ok "Form '--update' (als \$0) wird erkannt"
+fi
+# bash -c "$(wget ...)" -- --update  → $0 ist "--"
+OUT3="$(bash -c "bash \"$INSTALLER\" -- --update" 2>&1 || true)"
+if echo "$OUT3" | grep -q "Unbekannte Option"; then
+  bad "Form '-- --update' wird nicht erkannt"
+else
+  ok "Form '-- --update' wird erkannt"
+fi
+
 # ── 4. Argumente kommen an ───────────────────────────────────────────────────
 echo "== Argumente =="
 : > "$MOCK_STATE"
