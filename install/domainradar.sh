@@ -247,26 +247,40 @@ pick_template() {
   echo "local:$ref"
 }
 
+ct_status() {
+  # Wertet pct status robust aus: "running", "stopped" oder "missing".
+  # Exit-Code 2 (stopped/missing) wird mit || true entschaerft, damit die
+  # ERR-Falle (set -o pipefail) nicht vor der Auswertung feuert.
+  # 2>&1: manche PVE-Versionen melden den Status/die Fehlermeldung nur auf stderr.
+  local id=$1 out
+  out="$(pct status "$id" 2>&1 || true)"
+  case "$out" in
+    *"does not exist"*|*"not exist"*|*"No such"*) echo "missing" ;;
+    *) printf '%s\n' "$out" | awk 'NR==1 {print $2}' ;;
+  esac
+}
+
 verify_ct_started() {
-  local id=$1
-  local status
-  # pct status liefert Exit-Code 2, sobald der Container STOPPED ist.
-  # Mit "set -o pipefail" wuerde die ERR-Falle sonst auf die awk-Zeile feuern,
-  # bevor wir den Status auswerten koennen – deshalb "|| true".
-  # 2>&1 statt 2>/dev/null: manche PVE-Versionen melden "status: stopped" nur auf stderr.
-  status="$(pct status "$id" 2>&1 | awk '{print $2}' || true)"
-  if [ "$status" != "running" ]; then
-    msg_info "Container $id ist nicht aktiv (Status: ${status:-unbekannt}) – starte ihn"
-    pct start "$id" || die "pct start $id ist fehlgeschlagen"
-    local _ waited=0
-    for _ in $(seq 1 30); do
-      status="$(pct status "$id" 2>&1 | awk '{print $2}' || true)"
-      [ "$status" = "running" ] && break
-      sleep 2
-      waited=$((waited + 2))
-    done
-    [ "$status" = "running" ] || die "Container $id läuft auch ${waited}s nach pct start nicht (Status: ${status:-unbekannt})"
+  local id=$1 status
+  status="$(ct_status "$id")"
+  if [ "$status" = "running" ]; then
+    msg_ok "Container $id läuft"
+    return 0
   fi
+  if [ "$status" = "missing" ]; then
+    die "Container $id existiert nicht auf diesem Host (nodes/$(hostname)/lxc/$id.conf fehlt). pct list prüfen – falls der Container gelöscht wurde, frisch installieren (ohne --update)."
+  fi
+  msg_info "Container $id ist nicht aktiv (Status: ${status:-unbekannt}) – starte ihn"
+  pct start "$id" || die "pct start $id ist fehlgeschlagen"
+  local _ waited=0
+  for _ in $(seq 1 30); do
+    status="$(ct_status "$id")"
+    [ "$status" = "running" ] && break
+    [ "$status" = "missing" ] && die "Container $id ist während des Starts verschwunden (Config fehlt)"
+    sleep 2
+    waited=$((waited + 2))
+  done
+  [ "$status" = "running" ] || die "Container $id läuft auch ${waited}s nach pct start nicht (Status: ${status:-unbekannt})"
   msg_ok "Container $id läuft"
 }
 
