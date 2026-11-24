@@ -67,6 +67,7 @@ CT_ROOTFS="${CT_ROOTFS:-$DEFAULT_DISK}"
 UNPRIVILEGED="${UNPRIVILEGED:-1}"
 TZ_NAME="${TZ:-Europe/Berlin}"
 LOG_FILE="/tmp/${APP_NAME}-install.log"
+STAGE_DIR=""
 
 if [ -t 1 ]; then
   C_RESET=$'\033[0m'; C_INFO=$'\033[34m'; C_OK=$'\033[32m'
@@ -295,9 +296,11 @@ do_install() {
   wait_ct_network "$ctid"
 
   msg_info "Lade Skripte"
-  local stage
-  stage="$(mktemp -d)"
-  trap 'rm -rf "$stage"' EXIT
+  # Bewusst global (nicht `local`): die EXIT-Falle läuft erst nach dem Ende
+  # dieser Funktion und würde eine lokale Variable nicht mehr sehen.
+  STAGE_DIR="$(mktemp -d)"
+  stage="$STAGE_DIR"
+  trap 'rm -rf "${STAGE_DIR:-}"' EXIT
 
   local ok=0
   for base in "https://raw.githubusercontent.com/HatchetMan111/DomainRadar/main" \
