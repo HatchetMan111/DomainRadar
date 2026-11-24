@@ -470,6 +470,23 @@ verify_installation() {
 
   if [ "$code" = "200" ]; then
     msg_ok "Web-UI antwortet (HTTP 200 auf Port $WEB_PORT)"
+    # Auch die Container-IP testen: ein Bind auf 127.0.0.1 ist innen grün,
+    # von außen aber nicht erreichbar.
+    local lan_ip="" code_lan="" _
+    lan_ip="$(pct exec "$id" -- hostname -I 2>/dev/null | awk '{print $1}')"
+    if [ -n "$lan_ip" ] && [ "$lan_ip" != "127.0.0.1" ]; then
+      for _ in $(seq 1 10); do
+        code_lan="$(pct exec "$id" -- curl -s -o /dev/null -w '%{http_code}' -m 4 "http://$lan_ip:$WEB_PORT/api/health" 2>/dev/null || true)"
+        [ "$code_lan" = "200" ] && break
+        sleep 1
+      done
+      if [ "$code_lan" = "200" ]; then
+        msg_ok "Web-UI auch über Container-IP erreichbar (http://$lan_ip:$WEB_PORT)"
+      else
+        msg_error "Web-UI antwortet auf 127.0.0.1, aber nicht auf $lan_ip (HTTP ${code_lan:-keine Antwort}) – API lauscht nur lokal? DOMAINRADAR_HOST prüfen"
+        die "Verifikation fehlgeschlagen"
+      fi
+    fi
   else
     msg_error "Web-UI antwortet nicht (HTTP ${code:-keine Antwort})"
     pct exec "$id" -- journalctl -u domainradar-api -n 30 --no-pager >&2 || true
