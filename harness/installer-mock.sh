@@ -75,7 +75,12 @@ case "$cmd" in
     fi
     ;;
   status)
-    # Realistisches Verhalten: exit 2, sobald der Container gestoppt ist
+    # Realistisches Verhalten: Config fehlt -> Fehlermeldung auf stderr, exit 2
+    if [ -f "${MOCK_STATE}.missing" ]; then
+      echo "Configuration file 'nodes/mock/lxc/250.conf' does not exist" >&2
+      exit 2
+    fi
+    # exit 2, sobald der Container gestoppt ist
     if [ -f "${MOCK_STATE}.stopped" ]; then
       echo "status: stopped"
       exit 2
@@ -414,6 +419,23 @@ else
   ok "--update mit gestopptem CT läuft fehlerfrei durch (kein ERR-Trap)"
 fi
 rm -f "$MOCK_STATE.stopped"
+
+# ── 6c. Container-Konfiguration fehlt: klare Meldung, kein Startversuch ──────
+echo "== Update bei fehlender CT-Konfiguration =="
+: > "$MOCK_STATE"
+: > "$MOCK_STATE.missing"
+OUT_M="$(MOCK_HAVE_CT=1 bash "$INSTALLER" --update 2>&1 || true)"
+if echo "$OUT_M" | grep -q "existiert nicht"; then
+  ok "--update meldet fehlende Container-Konfiguration klar"
+else
+  bad "--update erkennt fehlende Config nicht: $OUT_M"
+fi
+if echo "$OUT_M" | grep -q "starte ihn"; then
+  bad "--update versucht bei fehlender Config trotzdem zu starten: $OUT_M"
+else
+  ok "--update startet bei fehlender Config nicht"
+fi
+rm -f "$MOCK_STATE.missing"
 
 echo
 echo "-----------------------------------------"
