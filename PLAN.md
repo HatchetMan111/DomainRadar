@@ -608,3 +608,44 @@ sagt nichts darüber, ob Modell und Endpunkt zusammenpassen. Vier Fälle:
    `if env.get(...)` auf „nicht konfiguriert" prüfte. Folge: ein Provider wurde
    stillschweigend übersprungen, obwohl er konfiguriert war. Jetzt werden leere
    Werte durch die Defaults ersetzt.
+
+## 15. Veröffentlichung (2026-11-24)
+
+Repo: **https://github.com/HatchetMan111/DomainRadar** (Branch `main`, MIT).
+
+Einzeiler:
+
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DomainRadar/main/install/domainradar.sh)"
+```
+
+### Was beim Veröffentlichen gefunden wurde
+
+Vier echte Bugs, alle erst beim Testen des *ausgelieferten* Skripts aufgefallen —
+nicht beim Schreiben:
+
+| Bug | Wirkung | Ursache |
+|---|---|---|
+| Repo-URL zeigte auf `DomainRadar-Proxmox` | Installer konnte sich nicht selbst nachladen | Name beim Anlegen geändert, URL nicht |
+| `-- --update` brach ab | In der README dokumentierte Form unbrauchbar | `$0`-Fallback sortierte `--` in die Argumentliste |
+| `pct list \| awk` vor der Werkzeugprüfung | Exit 127 statt klarer Meldung | `require_host_prereqs` stand nach `do_status` |
+| `stage ist nicht gesetzt` nach „Fertig" | Verwirrende Meldung nach erfolgreicher Installation | EXIT-Falle griff auf lokale Variable zu |
+
+Der dritte ist der lehrreichste: `set -Eeuo pipefail` plus Pipeline heißt, dass
+`pct list | awk` den Exit-Code von `pct` durchreicht. Die ERR-Falle feuert, bevor
+`die "Fehlende Werkzeuge"` überhaupt erreicht wird. Reihenfolge ist hier alles.
+
+### Belegter Testdurchlauf
+
+| Prüfung | Ergebnis |
+|---|---|
+| Unit-Tests | 171 |
+| `harness/run.sh` | 26/26 (Pipeline, API, Reboot-Nachweis) |
+| `harness/installer-mock.sh` | 13/13 (mit pct/pvesh/pveam-Attrappen) |
+| Installer aus dem Repo-Tarball, voller Durchlauf | Exit 0, alle Verifikationen grün |
+| Frontend-Build aus frischem Checkout | `npm ci` + `npm run build` → 154 KB / 50 KB gzip |
+| `requirements.txt` in frischem venv | fastapi 0.115.6, uvicorn 0.32.1, cryptography 44.0.0 |
+| Wheels für Python 3.13 | uvloop 0.23.0, httptools 0.6.4, pyyaml 6.0.4, cryptography cp39-abi3 |
+
+**Was fehlt:** der Lauf auf echter Proxmox-Hardware. `pct create`, `pveam`,
+Netzwerk-Setup und der Container-Start sind nur gegen Attrappen geprüft.
