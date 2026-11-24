@@ -336,3 +336,17 @@ class TestConnectionTestEndpoint:
         body = res.json()
         assert body["ok"] is False
         assert "Key" in body["message"]
+
+
+class TestManualRun:
+    def test_unknown_stage_404(self, client):
+        res = client.post("/api/run/xyz")
+        assert res.status_code == 404
+
+    def test_runs_status_lists_stages(self, client):
+        res = client.get("/api/runs")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["ok"] is True
+        assert {r["stage"] for r in body["runs"]} == {"collect", "enrich", "classify", "changes"}
+        assert all(r["running"] is False for r in body["runs"])
