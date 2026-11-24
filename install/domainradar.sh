@@ -253,18 +253,20 @@ verify_ct_started() {
   # pct status liefert Exit-Code 2, sobald der Container STOPPED ist.
   # Mit "set -o pipefail" wuerde die ERR-Falle sonst auf die awk-Zeile feuern,
   # bevor wir den Status auswerten koennen – deshalb "|| true".
-  status="$(pct status "$id" 2>/dev/null | awk '{print $2}' || true)"
+  # 2>&1 statt 2>/dev/null: manche PVE-Versionen melden "status: stopped" nur auf stderr.
+  status="$(pct status "$id" 2>&1 | awk '{print $2}' || true)"
   if [ "$status" != "running" ]; then
     msg_info "Container $id ist nicht aktiv (Status: ${status:-unbekannt}) – starte ihn"
-    pct start "$id" >/dev/null 2>&1 || true
-    local _
-    for _ in $(seq 1 10); do
-      status="$(pct status "$id" 2>/dev/null | awk '{print $2}' || true)"
+    pct start "$id" || die "pct start $id ist fehlgeschlagen"
+    local _ waited=0
+    for _ in $(seq 1 30); do
+      status="$(pct status "$id" 2>&1 | awk '{print $2}' || true)"
       [ "$status" = "running" ] && break
-      sleep 1
+      sleep 2
+      waited=$((waited + 2))
     done
+    [ "$status" = "running" ] || die "Container $id läuft auch ${waited}s nach pct start nicht (Status: ${status:-unbekannt})"
   fi
-  [ "$status" = "running" ] || die "Container $id läuft nicht (Status: ${status:-unbekannt})"
   msg_ok "Container $id läuft"
 }
 
