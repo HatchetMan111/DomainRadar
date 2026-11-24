@@ -339,3 +339,63 @@ class TestParkingDetection:
 
         assert detect_parking("", "winzig", 5) == "leer"
         assert detect_parking("", "x" * 100, 100) == "sehr wenig Text"
+
+
+class TestSettingsDriveClassifier:
+    """Änderungen aus der Einstellungsseite müssen die Kaskade steuern."""
+
+    def test_chain_from_settings_ollama_only(self):
+        from domainradar.classifier import chain_from_settings
+
+        chain = chain_from_settings(
+            {
+                "llm_chain": "ollama",
+                "ollama_base_url": "http://localhost:11434/v1",
+                "ollama_model": "llama3.1:8b",
+            }
+        )
+        assert [p.name for p in chain] == ["ollama"]
+        assert chain[0].model == "llama3.1:8b"
+        assert chain[0].base_url == "http://localhost:11434/v1"
+
+    def test_chain_from_settings_with_openrouter(self):
+        from domainradar.classifier import chain_from_settings
+
+        chain = chain_from_settings(
+            {
+                "llm_chain": "ollama,openrouter",
+                "ollama_base_url": "http://x/v1",
+                "ollama_model": "m",
+                "openrouter_api_key": "sk-or-test",
+                "openrouter_model": "deepseek/deepseek-chat",
+            }
+        )
+        assert [p.name for p in chain] == ["ollama", "openrouter"]
+
+    def test_chain_from_settings_without_key_skips_openrouter(self):
+        from domainradar.classifier import chain_from_settings
+
+        chain = chain_from_settings(
+            {
+                "llm_chain": "ollama,openrouter",
+                "ollama_base_url": "http://x/v1",
+                "ollama_model": "m",
+                "openrouter_api_key": "",
+            }
+        )
+        assert [p.name for p in chain] == ["ollama"]
+
+    def test_escalation_threshold_is_configurable(self):
+        # Schwelle 0.95: Stufe 1 muss auch bei guter Konfidenz eskalieren
+        stage1 = FakeProvider(response=_wrap([_item("a.de", 0.9)]))
+        stage2 = FakeProvider(name="openrouter", response=_wrap([_item("a.de", 0.99)]))
+        items = [{"domain": "a.de", "title": "x", "description": "y", "text": ""}]
+        classify_batch(items, [stage1, stage2], escalate_below=0.95)
+        assert stage2.calls == 1, "bei Schwelle 0,95 muss eskaliert werden"
+
+    def test_escalation_threshold_high_skips(self):
+        stage1 = FakeProvider(response=_wrap([_item("a.de", 0.99)]))
+        stage2 = FakeProvider(name="openrouter", response=_wrap([_item("a.de", 0.5)]))
+        items = [{"domain": "a.de", "title": "x", "description": "y", "text": ""}]
+        classify_batch(items, [stage1, stage2], escalate_below=0.5)
+        assert stage2.calls == 0, "bei Schwelle 0,5 darf nicht eskaliert werden"

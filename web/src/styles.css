@@ -388,3 +388,201 @@ td.domain {
     align-self: flex-start;
   }
 }
+/* ---------- Einstellungen ---------- */
+
+.views-sub {
+  margin-bottom: 18px;
+}
+
+.settings {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+}
+
+.settings-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 8px;
+}
+
+.settings-head h2 {
+  margin: 0 0 4px;
+  font-size: 19px;
+}
+
+.settings-head code {
+  background: var(--panel-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  color: var(--accent);
+}
+
+.settings-group {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-group h3 {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.setting-row {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 6px 18px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.setting-row label {
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.setting-row input,
+.setting-row select {
+  width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 11px;
+  font-size: 13.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.setting-row input:focus,
+.setting-row select:focus {
+  outline: 2px solid var(--accent-dim);
+  outline-offset: 1px;
+}
+
+.setting-row .hint {
+  grid-column: 2;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.secret-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--accent-dim);
+  color: #fff;
+}
+
+.badge.off {
+  background: #3a3320;
+  color: var(--warn);
+}
+
+.test-row {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+button.primary,
+button.ghost {
+  appearance: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+button.primary {
+  border: 0;
+  background: var(--accent-dim);
+  color: #fff;
+}
+
+button.primary:hover {
+  background: #37805c;
+}
+
+button.primary:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+button.ghost {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 500;
+}
+
+button.ghost:hover {
+  background: #2a2f3a;
+}
+
+button.ghost:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.msg-ok {
+  color: var(--accent);
+  font-size: 13.5px;
+  font-weight: 550;
+  margin: 10px 0 0;
+}
+
+.msg-error {
+  color: #ff9aa2;
+  font-size: 13.5px;
+  margin: 10px 0 0;
+}
+
+.settings-note {
+  margin: 20px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12.5px;
+  max-width: 90ch;
+}
+
+.settings-hint {
+  color: var(--muted);
+  padding: 20px 0;
+}
+
+@media (max-width: 700px) {
+  .setting-row {
+    grid-template-columns: 1fr;
+  }
+  .setting-row .hint,
+  .test-row {
+    grid-column: 1;
+  }
+}

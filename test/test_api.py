@@ -177,3 +177,162 @@ class TestEmptyDatabase:
         assert c.get("/api/startups").json()["total"] == 0
         assert c.get("/api/stats").status_code == 200
         assert c.get("/feed.xml").status_code == 200
+
+class TestSettingsApi:
+    """Endpunkte der Einstellungsseite."""
+
+    def test_get_settings(self, client):
+        res = client.get("/api/settings")
+        assert res.status_code == 200
+        body = res.json()
+        assert "values" in body
+        assert "meta" in body
+        assert "groups" in body
+        # Jeder bekannte Schlüssel muss beschrieben sein
+        for key in body["meta"]:
+            assert key in body["values"], f"{key} fehlt in values"
+
+    def test_secret_is_masked_in_response(self, client):
+        # Key setzen
+        client.put("/api/settings", json={"values": {"openrouter_api_key": "sk-or-1234567890"}})
+        body = client.get("/api/settings").json()
+        secret = body["values"]["openrouter_api_key"]
+        assert secret["is_set"] is True
+        assert "1234567890" not in str(secret)
+        assert "7890" in secret["preview"]
+
+    def test_put_changes_value(self, client):
+        res = client.put("/api/settings", json={"values": {"ollama_model": "llama3.1:8b"}})
+        assert res.status_code == 200
+        assert "ollama_model" in res.json()["changed"]
+        body = client.get("/api/settings").json()
+        assert body["values"]["ollama_model"] == "llama3.1:8b"
+
+    def test_put_empty_secret_keeps_old(self, client):
+        client.put("/api/settings", json={"values": {"openrouter_api_key": "sk-or-alt"}})
+        res = client.put("/api/settings", json={"values": {"openrouter_api_key": ""}})
+        assert "openrouter_api_key" not in res.json()["changed"]
+        # Weiterhin gesetzt
+        body = client.get("/api/settings").json()
+        assert body["values"]["openrouter_api_key"]["is_set"] is True
+
+    def test_put_rejects_missing_values(self, client):
+        assert client.put("/api/settings", json={}).status_code == 422
+
+    def test_put_rejects_non_object(self, client):
+        assert client.put("/api/settings", json=[1, 2, 3]).status_code == 422
+
+    def test_put_ignores_unknown_keys(self, client):
+        res = client.put("/api/settings", json={"values": {"gibt_es_nicht": "x"}})
+        assert res.json()["changed"] == []
+
+    def test_test_endpoint_rejects_unknown_provider(self, client):
+        res = client.post("/api/settings/test", json={"provider": "nos"})
+        assert res.status_code == 422
+
+    def test_test_endpoint_openrouter_without_key(self, client):
+        res = client.post("/api/settings/test", json={"provider": "openrouter"})
+        assert res.status_code == 200
+        body = res.json()
+        assert body["ok"] is False
+        assert "Key" in body["message"]
+
+    def test_test_endpoint_uses_unsaved_values(self, client):
+        # Werte mitschicken, ohne sie zu speichern
+        res = client.post(
+            "/api/settings/test",
+            json={
+                "provider": "ollama",
+                "values": {"ollama_base_url": "", "ollama_model": ""},
+            },
+        )
+        body = res.json()
+        assert body["ok"] is False
+        assert "URL" in body["message"]
+
+
+class TestSettingsRoute:
+    """Die Einstellungsseite muss per SPA-Fallback erreichbar sein."""
+
+    def test_settings_url_serves_app(self, client):
+        res = client.get("/settings")
+        assert res.status_code == 200
+
+
+class TestConnectionTestEndpoint:
+    """Der Verbindungstest muss Fehlerarten unterscheiden, nicht nur abbrechen."""
+
+    def test_success_path(self, client, monkeypatch):
+        """Erfolgreicher Minimal-Call → ok=true mit Antworttext."""
+        import urllib.request
+        from unittest.mock import MagicMock
+
+        class Resp:
+            status = 200
+
+            def read(self):
+                return b'{"choices":[{"message":{"content":"OK"}}]}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: Resp())
+        res = client.post(
+            "/api/settings/test",
+            json={
+                "provider": "ollama",
+                "values": {"ollama_base_url": "http://x/v1", "ollama_model": "m"},
+            },
+        )
+        body = res.json()
+        assert body["ok"] is True
+        assert "OK" in body["message"]
+
+    def test_model_not_found_gives_hint(self, client, monkeypatch):
+        import urllib.error
+        import urllib.request
+
+        def raise_404(*a, **k):
+            raise urllib.error.HTTPError(
+                "http://x", 404, "Not Found", {}, None
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", raise_404)
+        res = client.post(
+            "/api/settings/test",
+            json={
+                "provider": "ollama",
+                "values": {"ollama_base_url": "http://x/v1", "ollama_model": "m"},
+            },
+        )
+        body = res.json()
+        assert body["ok"] is False
+        assert "Modell" in body["message"]
+
+    def test_bad_key_gives_hint(self, client, monkeypatch):
+        import urllib.error
+        import urllib.request
+
+        def raise_401(*a, **k):
+            raise urllib.error.HTTPError(
+                "http://x", 401, "Unauthorized", {}, None
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", raise_401)
+        res = client.post(
+            "/api/settings/test",
+            json={
+                "provider": "openrouter",
+                "values": {
+                    "openrouter_base_url": "http://x/v1",
+                    "openrouter_model": "m",
+                    "openrouter_api_key": "sk-or-x",
+                },
+            },
+        )
+        body = res.json()
+        assert body["ok"] is False
+        assert "Key" in body["message"]

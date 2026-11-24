@@ -26,6 +26,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
+from .config import DEFAULTS
 from .db import Database
 
 log = logging.getLogger("domainradar.classifier")
@@ -171,6 +172,35 @@ def build_chain(env: dict[str, str] | None = None) -> list[Provider]:
     return chain
 
 
+def chain_from_settings(settings: dict) -> list[Provider]:
+    """Provider-Kette aus der wirksamen Konfiguration bauen.
+
+    Gegenüber `build_chain` der Unterschied: die Werte kommen aus Datenbank
+    und Umgebung, nicht nur aus der Umgebung. Damit greifen Änderungen aus
+    der Einstellungsseite sofort.
+
+    Leere Werte werden zu sinnvollen Defaults aufgefüllt. Ohne das würde
+    `build_chain` einen leeren Modellnamen als "nicht konfiguriert" lesen
+    und den Provider stillschweigend überspringen.
+    """
+    return build_chain(
+        {
+            "LLM_CHAIN": str(settings.get("llm_chain") or "ollama,openrouter"),
+            "OLLAMA_BASE_URL": str(
+                settings.get("ollama_base_url") or DEFAULTS["ollama_base_url"]
+            ),
+            "OLLAMA_MODEL": str(settings.get("ollama_model") or DEFAULTS["ollama_model"]),
+            "OPENROUTER_BASE_URL": str(
+                settings.get("openrouter_base_url") or DEFAULTS["openrouter_base_url"]
+            ),
+            "OPENROUTER_MODEL": str(
+                settings.get("openrouter_model") or DEFAULTS["openrouter_model"]
+            ),
+            "OPENROUTER_API_KEY": str(settings.get("openrouter_api_key") or ""),
+        }
+    )
+
+
 def parse_llm_response(raw: str) -> dict[str, Any]:
     """LLM-Antwort robust parsen – auch mit Markdown-Rahmen oder Vortext."""
     text = raw.strip()
@@ -309,7 +339,9 @@ def _build_user_prompt(items: list[dict[str, str]]) -> str:
 
 
 def classify_batch(
-    items: list[dict[str, str]], chain: list[Provider]
+    items: list[dict[str, str]],
+    chain: list[Provider],
+    escalate_below: float = 0.75,
 ) -> tuple[dict[str, dict], str, str]:
     """Ein Batch (max. 10) klassifizieren.
 
@@ -331,7 +363,6 @@ def classify_batch(
 
     prompt = _build_user_prompt(items)
     first_provider = chain[0]
-    escalate_below = 0.75
     used = first_provider.name
     model = first_provider.model
     stage1_ok = False
@@ -410,12 +441,24 @@ def classify_batch(
 def run_once(
     db: Database,
     *,
-    batch_size: int = 10,
+    batch_size: int | None = None,
     chain: list[Provider] | None = None,
     verbose: bool = False,
 ) -> dict:
-    """Alle offenen Domains klassifizieren."""
-    chain = chain if chain is not None else build_chain()
+    """Alle offenen Domains klassifizieren.
+
+    Ohne `chain` wird die wirksame Konfiguration aus Datenbank und Umgebung
+    gelesen – damit greifen Änderungen aus der Einstellungsseite sofort.
+    """
+    from . import config
+
+    settings = config.load(db)
+    if batch_size is None:
+        batch_size = int(settings.get("classify_batch", 10) or 10)
+    escalate_below = float(settings.get("llm_escalate_below", 0.75) or 0.75)
+    if chain is None:
+        chain = chain_from_settings(settings)
+
     domains = db.domains_without_classification(limit=batch_size * 10)
 
     stats = {"attempted": 0, "classified": 0, "provider": "", "model": ""}
@@ -437,7 +480,9 @@ def run_once(
         if not items:
             continue
 
-        results, provider_name, model = classify_batch(items, chain)
+        results, provider_name, model = classify_batch(
+            items, chain, escalate_below=escalate_below
+        )
         stats["provider"] = provider_name
         stats["model"] = model
 

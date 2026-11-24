@@ -102,6 +102,12 @@ CREATE TABLE IF NOT EXISTS page_cache (
   fetched_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT,
+  updated_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS notes (
   id         INTEGER PRIMARY KEY,
   domain     TEXT NOT NULL,

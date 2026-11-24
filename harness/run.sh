@@ -149,12 +149,45 @@ stop_api() {
 
 if start_api; then
   ok "API startet"
-  for ep in /api/health /api/stats /api/startups /feed.xml /export/leads.csv; do
+  for ep in /api/health /api/stats /api/startups /feed.xml /export/leads.csv /api/settings; do
     code=$(curl -s -o /dev/null -w '%{http_code}' -m 4 "http://127.0.0.1:8479$ep")
     if [ "$code" = "200" ]; then ok "$ep → 200"; else bad "$ep → $code"; fi
   done
   DOM=$(curl -s -m 4 http://127.0.0.1:8479/ | grep -oE 'assets/index-[A-Za-z0-9_-]+\.js' | head -1)
   if [ -n "$DOM" ]; then ok "Frontend ausgeliefert ($DOM)"; else bad "Frontend fehlt"; fi
+
+  # Einstellungsseite: Felder, Maskierung, Speichern
+  SET=$(curl -s -m 4 http://127.0.0.1:8479/api/settings)
+  NFIELDS=$(printf '%s' "$SET" | python3 -c "
+import json,sys
+try: print(len(json.load(sys.stdin)['meta']))
+except Exception: print(0)
+" 2>/dev/null)
+  if [ "${NFIELDS:-0}" -gt 0 ]; then ok "Einstellungsseite: $NFIELDS Felder"; else bad "Einstellungsseite leer"; fi
+
+  # Key setzen und pruefen, dass er maskiert zurueckkommt
+  curl -s -m 4 -X PUT http://127.0.0.1:8479/api/settings \
+    -H "Content-Type: application/json" \
+    -d '{"values":{"openrouter_api_key":"sk-or-harneytest-1234"}}' >/dev/null
+  LEAK=$(curl -s -m 4 http://127.0.0.1:8479/api/settings | grep -c "harneytest" || true)
+  if [ "$LEAK" = "0" ]; then ok "API-Key wird nicht im Klartext ausgeliefert"
+  else bad "API-Key leakt im Klartext"; fi
+
+  # Verbindungstest ohne Provider-Konfiguration muss sauber antworten
+  TC=$(curl -s -m 10 -X POST http://127.0.0.1:8479/api/settings/test \
+    -H "Content-Type: application/json" -d '{"provider":"ollama","values":{"ollama_base_url":"http://127.0.0.1:9/v1","ollama_model":"x"}}')
+  OKFLAG=$(printf '%s' "$TC" | python3 -c "
+import json,sys
+try: print('true' if json.load(sys.stdin).get('ok') else 'false')
+except Exception: print('error')
+" 2>/dev/null)
+  if [ "$OKFLAG" = "false" ]; then ok "Verbindungstest meldet Fehler korrekt"
+  else bad "Verbindungstest antwortet unerwartet: $TC"; fi
+
+  # Test-DB aufraeumen, damit der naechste Lauf sauber startet
+  curl -s -m 4 -X PUT http://127.0.0.1:8479/api/settings \
+    -H "Content-Type: application/json" \
+    -d '{"values":{"ollama_model":"llama3.2:3b"}}' >/dev/null
 else
   bad "API startet nicht"
   tail -10 /tmp/dr-api.log

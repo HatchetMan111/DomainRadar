@@ -83,7 +83,34 @@ bash -c "$(wget -qLO - .../install/domainradar.sh)" -- --debug
 
 ## ⚙️ Konfiguration
 
-Die Datei `/opt/domainradar/.env` (Modus 600) steuert alles:
+### Einstellungsseite (empfohlen)
+
+In der Oberfläche oben auf **Einstellungen**. 14 Felder in drei Gruppen:
+
+| Gruppe | Inhalt |
+|---|---|
+| **LLM** | Provider-Kaskade, Eskalationsschwelle, Ollama-URL + Modell, OpenRouter-URL + Modell + API-Key |
+| **Erfassung** | Zertifikate pro Lauf, Domains pro Durchgang, HTTP-Timeout, robots.txt beachten, Domains pro LLM-Aufruf |
+| **Auswertung** | Zielkategorien für Leads, Domains pro Änderungslauf |
+
+Zwei Knöpfe „**Verbindung testen**" (bei Ollama und OpenRouter) bauen einen echten
+Minimal-Aufruf und unterscheiden vier Fälle:
+
+| Antwort | Bedeutung |
+|---|---|
+| „Verbindung steht – Antwort: OK" | Endpunkt und Modell passen |
+| „HTTP 404 Not Found (Modellname prüfen)" | Endpunkt richtig, Modell nicht vorhanden |
+| „HTTP 401 Unauthorized (API-Key falsch …)" | Key falsch oder abgelaufen |
+| „Nicht erreichbar (URLError …)" | Endpunkt läuft nicht |
+
+Speichern schreibt in die Datenbank. Die Zeitpläne sind `oneshot`-Einheiten und
+starten für jeden Lauf neu — **Änderungen greifen ohne Neustart** beim nächsten Lauf.
+
+### Datei-Konfiguration
+
+Alternativ `/opt/domainradar/.env` (Modus 600). **Achtung Rangfolge:** Werte aus
+der Oberfläche überschreiben die Datei. Wer die Datei ändert und trotzdem alte
+Werte sieht, hat in der Oberfläche gespeichert.
 
 | Variable | Default | Bedeutung |
 |---|---|---|
@@ -94,18 +121,12 @@ Die Datei `/opt/domainradar/.env` (Modus 600) steuert alles:
 | `OLLAMA_MODEL` | `llama3.2:3b` | Modell für Stufe 1 |
 | `OPENROUTER_MODEL` | `deepseek/deepseek-chat` | Modell für Stufe 2 |
 | `OPENROUTER_API_KEY` | *(leer)* | Key für Stufe 2 |
+| `TARGET_CATEGORIES` | `software,energy,smart-home,climate` | Zielkategorien für Leads |
 
-**LLM-Kaskade:** Erst Ollama (gratis, lokal). Nur wenn die Konfidenz unter 0,75 liegt,
-wird nach OpenRouter eskaliert. Ohne Key und ohne Ollama läuft eine regelbasierte
-Klassifikation weiter — die App bricht nie ab.
-
-```bash
-# Nur lokal, keine Cloud
-LLM_CHAIN=ollama
-
-# Nur OpenRouter
-LLM_CHAIN=openrouter
-```
+**LLM-Kaskade:** Erst Ollama (gratis, lokal). Nur wenn die Konfidenz unter
+`llm_escalate_below` (Default 0,75) liegt, wird nach OpenRouter eskaliert.
+Ohne Key und ohne Ollama läuft eine regelbasierte Klassifikation weiter — die
+App bricht nie ab.
 
 ---
 
@@ -133,6 +154,13 @@ Alle mit `Persistent=true`, verpasste Läufe werden nachgeholt.
 ---
 
 ## 🧭 Bedienung
+
+**Radar** — die Beobachtungsdatenbank.
+
+**Einstellungen** — LLM-Provider, API-Keys, Erfassungslimits, Zielkategorien.
+Mit Verbindungstest pro Provider.
+
+Innerhalb des Radars zwei Ansichten:
 
 **Markt** — alle beobachteten Domains, nach Kategorie und Zeit filterbar.
 
@@ -213,6 +241,9 @@ Das ist keine Formsache, sondern der Kern der Anwendung:
 
 - **Öffentliche Quellen.** Zertifikats-Logs sind öffentlich, Webseiten sind öffentlich.
   Es werden keine Daten gekauft oder erschlichen.
+- **API-Keys bleiben lokal.** Keys werden in der Datenbank gespeichert und maskiert
+  an die Oberfläche ausgeliefert (`sk-or-…` → `sk**************t999`). Ein leer
+  gelassenes Feld beim Speichern lässt den bestehenden Wert unverändert.
 - **Datensparsamkeit.** Von Impressumsdaten wird nur Firmenname und Rechtsform
   gespeichert. Adresse, Telefon und E-Mail werden **nicht** erfasst.
 - **Alles lokal.** Keine Weitergabe an Dritte, keine Cloud, keine Telemetrie.

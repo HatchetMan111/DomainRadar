@@ -114,6 +114,69 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
         ).fetchall()
         return {"hits": [dict(r) for r in rows]}
 
+    # ---------- Einstellungen ----------
+
+    @app.get("/api/settings")
+    def get_settings():
+        """Wirksame Konfiguration – Geheimnisse maskiert."""
+        from . import config
+
+        settings = config.load(db)
+        return {
+            "values": config.public_view(settings),
+            "meta": config.FIELD_META,
+            "groups": config.GROUP_ORDER,
+            "defaults": config.DEFAULTS,
+        }
+
+    @app.put("/api/settings")
+    def put_settings(payload: dict):
+        """Einstellungen speichern.
+
+        Bewusst ein `PUT` mit vollständigem Objekt: so kann die Oberfläche
+        einen leeren Wert mitschicken, ohne dass ein Teil-Update mehrere
+        Schreibzugriffe braucht.
+        """
+        from . import config
+
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="JSON-Objekt erwartet")
+
+        values = payload.get("values")
+        if not isinstance(values, dict):
+            raise HTTPException(status_code=422, detail="Feld 'values' fehlt")
+
+        changed = config.save(db, values)
+        return {
+            "ok": True,
+            "changed": changed,
+            "values": config.public_view(config.load(db)),
+        }
+
+    @app.post("/api/settings/test")
+    def test_setting(payload: dict):
+        """Verbindung zu einem Provider prüfen.
+
+        Ein echter Minimal-Call, kein Port-Check: ein offener Port sagt nichts
+        darüber, ob Modell und Endpunkt zusammenpassen.
+        """
+        from . import config
+
+        provider = str(payload.get("provider", "")).strip().lower()
+        if provider not in ("ollama", "openrouter"):
+            raise HTTPException(
+                status_code=422, detail="provider muss 'ollama' oder 'openrouter' sein"
+            )
+
+        # Noch nicht gespeicherte Werte mitverwenden, damit man testen kann,
+        # bevor man speichert.
+        settings = config.load(db)
+        for key, value in (payload.get("values") or {}).items():
+            if key in config.DEFAULTS and value is not None:
+                settings[key] = value
+
+        return config.test_connection(provider, settings)
+
     # ---------- Feed ----------
 
     @app.get("/feed.xml", response_class=PlainTextResponse)

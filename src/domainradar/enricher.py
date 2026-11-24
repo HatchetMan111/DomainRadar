@@ -159,7 +159,7 @@ def detect_parking(html_lower: str, text: str, text_len: int) -> str:
     return ""
 
 
-def _fetch_once(url: str) -> tuple[int, str, str]:
+def _fetch_once(url: str, timeout: int = TIMEOUT) -> tuple[int, str, str]:
     """HTTP holen. Rückgabe: (status, final_url, body)."""
     ctx = ssl.create_default_context()
     # Manche frische Domains haben kein valides Zertifikat – das ist kein Grund,
@@ -176,7 +176,7 @@ def _fetch_once(url: str) -> tuple[int, str, str]:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             raw = resp.read(MAX_BYTES)
             charset = resp.headers.get_content_charset() or "utf-8"
             body = raw.decode(charset, errors="replace")
@@ -192,14 +192,20 @@ def _fetch_once(url: str) -> tuple[int, str, str]:
         raise RuntimeError(f"{type(exc).__name__}: {exc}") from exc
 
 
-def fetch_domain(domain: str, *, try_https: bool = True) -> FetchResult:
-    """Eine Domain lesen und auswerten."""
+def fetch_domain(
+    domain: str, *, try_https: bool = True, timeout: int = TIMEOUT
+) -> FetchResult:
+    """Eine Domain lesen und auswerten.
+
+    `timeout` kommt aus der Konfiguration, damit die Einstellungsseite das
+    Zeitlimit pro Abruf steuern kann.
+    """
     result = FetchResult(domain=domain, ok=False)
 
     scheme = "https" if try_https else "http"
     url = f"{scheme}://{domain}/"
     try:
-        status, final_url, body = _fetch_once(url)
+        status, final_url, body = _fetch_once(url, timeout=timeout)
     except RuntimeError as exc:
         # Einmal http versuchen, falls https scheitert (oder umgekehrt)
         if try_https:
@@ -253,9 +259,11 @@ def fetch_domain(domain: str, *, try_https: bool = True) -> FetchResult:
     return result
 
 
-def enrich_one(db: Database, domain: str) -> FetchResult:
+def enrich_one(
+    db: Database, domain: str, *, timeout: int = TIMEOUT
+) -> FetchResult:
     """Eine Domain holen und in die DB schreiben."""
-    result = fetch_domain(domain)
+    result = fetch_domain(domain, timeout=timeout)
     if result.ok:
         db.update_fetch(
             domain,
@@ -274,13 +282,27 @@ def enrich_one(db: Database, domain: str) -> FetchResult:
     return result
 
 
-def run_once(db: Database, *, limit: int = 100, verbose: bool = False) -> dict:
-    """Alle offenen Domains bis zum Limit lesen."""
+def run_once(
+    db: Database,
+    *,
+    limit: int | None = None,
+    verbose: bool = False,
+) -> dict:
+    """Alle offenen Domains bis zum Limit lesen.
+
+    Ohne `limit` wird `enrich_batch` aus der Konfiguration verwendet.
+    """
+    from . import config
+
+    settings = config.load(db)
+    if limit is None:
+        limit = int(settings.get("enrich_batch", 100) or 100)
+    timeout = int(settings.get("enrich_timeout", 10) or 10)
     domains = db.domains_without_fetch(limit=limit)
     stats = {"attempted": 0, "ok": 0, "parked": 0, "failed": 0}
     for domain in domains:
         stats["attempted"] += 1
-        res = enrich_one(db, domain)
+        res = enrich_one(db, domain, timeout=timeout)
         if res.ok and res.is_parked:
             stats["parked"] += 1
         elif res.ok:
