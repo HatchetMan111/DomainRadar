@@ -539,6 +539,46 @@ def run_once(
 
     return stats
 
+
+def classify_one(db: Database, domain: str) -> dict[str, Any] | None:
+    """Eine einzelne Domain klassifizieren (für Direkt-Prüfung via API)."""
+    row = db.get_domain(domain)
+    if row is None:
+        return None
+    from . import config
+
+    settings = config.load(db)
+    categories = categories_from_settings(settings)
+    chain = chain_from_settings(settings)
+    escalate_below = float(settings.get("llm_escalate_below", 0.75) or 0.75)
+    items = [
+        {
+            "domain": domain,
+            "title": row["title"] or "",
+            "description": row["meta_description"] or "",
+            "text": (row["meta_description"] or "") + " " + (row["title"] or ""),
+        }
+    ]
+    results, provider_name, model = classify_batch(
+        items, chain, escalate_below=escalate_below, categories=categories
+    )
+    res = results.get(domain)
+    if res is None:
+        return None
+    db.update_classification(
+        domain,
+        category=res["category"],
+        segment=res["segment"],
+        business_type=res["business_type"],
+        sells_own_product=1 if res["sells_own_product"] else 0,
+        confidence=res["confidence"],
+        summary_de=res["summary_de"],
+        classify_provider=provider_name,
+        classify_model=model,
+    )
+    return res
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
