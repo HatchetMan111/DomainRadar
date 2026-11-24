@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # DomainRadar – inneres Installationsskript, läuft im LXC.
-# Versions-Marker: DOMAINRADAR-INNER-VERSION 2
+# Versions-Marker: DOMAINRADAR-INNER-VERSION 3
 set -Eeuo pipefail
 
 APP_DIR="${APP_DIR:-/opt/domainradar}"
@@ -58,6 +58,11 @@ msg_info "Python-Umgebung"
 python3 -m venv "$APP_DIR/venv"
 "$APP_DIR/venv/bin/pip" install --quiet --upgrade pip >/dev/null
 "$APP_DIR/venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
+# src-Layout ohne Paket-Metadaten (kein pyproject.toml): Paket über .pth-Datei
+# im venv sichtbar machen, damit "python -m domainradar.*" aus jedem
+# WorkingDirectory funktioniert (systemd-Units, cron, manuelle Läufe).
+SITE_PACKAGES="$("$APP_DIR/venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+echo "$APP_DIR/src" > "$SITE_PACKAGES/domainradar.pth"
 
 if [ -f "$APP_DIR/web/package.json" ]; then
   msg_info "Baue Web-Oberfläche (React + Vite)"
