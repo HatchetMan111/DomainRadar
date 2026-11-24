@@ -16,6 +16,9 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -210,6 +213,83 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
                 settings[key] = value
 
         return config.test_connection(provider, settings)
+
+    # ---------- Manueller Pipeline-Trigger ----------
+
+    STAGES = ("collect", "enrich", "classify", "changes")
+    run_dir = Path(DB_PATH).parent
+    running: dict[str, subprocess.Popen] = {}
+
+    def _stage_pid(stage: str) -> int | None:
+        """PID der laufenden Stufe oder None; räumt tote PID-Dateien auf."""
+        proc = running.get(stage)
+        if proc is not None:
+            if proc.poll() is None:
+                return proc.pid
+            running.pop(stage, None)
+            (run_dir / f"run-{stage}.pid").unlink(missing_ok=True)
+            return None
+        pid_file = run_dir / f"run-{stage}.pid"
+        if not pid_file.exists():
+            return None
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, 0)
+            return pid
+        except (ValueError, ProcessLookupError, PermissionError, OSError):
+            pid_file.unlink(missing_ok=True)
+            return None
+
+    @app.get("/api/runs")
+    def runs_status(request: Request):
+        _check_auth(request)
+        all_pid = _stage_pid("all")
+        out = []
+        for s in STAGES:
+            pid = all_pid or _stage_pid(s)
+            log_file = run_dir / ("run-all.log" if all_pid else f"run-{s}.log")
+            tail: list[str] = []
+            if log_file.exists():
+                tail = log_file.read_text(errors="replace").splitlines()[-5:]
+            out.append({"stage": s, "running": pid is not None, "pid": pid, "log_tail": tail})
+        return {"ok": True, "runs": out}
+
+    @app.post("/api/run/{stage}")
+    def run_stage(stage: str, request: Request):
+        _check_auth(request)
+        stage = stage.strip().lower()
+        if stage == "all":
+            stages = list(STAGES)
+        elif stage in STAGES:
+            stages = [stage]
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Unbekannte Stufe: {stage!r} (erlaubt: {', '.join(STAGES)} oder 'all')",
+            )
+        for s in stages:
+            pid = _stage_pid(s)
+            if pid is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Stufe '{s}' läuft bereits (PID {pid})",
+                )
+        if _stage_pid("all") is not None:
+            raise HTTPException(status_code=409, detail="'all' läuft bereits")
+        label = "all" if stage == "all" else stage
+        cmd = " && ".join(f"{shlex.quote(sys.executable)} -m domainradar.{s}" for s in stages)
+        log_file = run_dir / f"run-{label}.log"
+        with open(log_file, "ab", buffering=0) as lf:
+            proc = subprocess.Popen(
+                ["/bin/sh", "-c", cmd],
+                stdout=lf,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        running[label] = proc
+        (run_dir / f"run-{label}.pid").write_text(str(proc.pid))
+        log.info("Pipeline manuell gestartet (%s, PID %d)", cmd, proc.pid)
+        return {"ok": True, "stage": label, "pid": proc.pid, "log": str(log_file)}
 
     # ---------- Feed & Export ----------
 
