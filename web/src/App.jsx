@@ -44,6 +44,8 @@ export default function App() {
   const [category, setCategory] = useState("");
   const [sort, setSort] = useState("newest");
   const [detail, setDetail] = useState(null);
+  const [runBusy, setRunBusy] = useState(false);
+  const [runMsg, setRunMsg] = useState("");
 
   useEffect(() => {
     api
@@ -92,6 +94,32 @@ export default function App() {
     }
   }, []);
 
+  const triggerRun = useCallback(async () => {
+    setRunBusy(true);
+    setRunMsg("Pipeline wird gestartet …");
+    try {
+      const res = await api.run("all");
+      setRunMsg(`Pipeline läuft (PID ${res.pid}) …`);
+      const timer = setInterval(async () => {
+        try {
+          const st = await api.runs();
+          const anyRunning = (st.runs || []).some((r) => r.running);
+          if (!anyRunning) {
+            clearInterval(timer);
+            setRunBusy(false);
+            setRunMsg("Abruf fertig – Ansicht aktualisiert.");
+            load();
+            api.stats().then(setStats).catch(() => {});
+          }
+        } catch {
+          /* nächstes Intervall abwarten */
+        }
+      }, 5000);
+    } catch (e) {
+      setRunBusy(false);
+      setRunMsg(`Fehler: ${e.message}`);
+    }
+  }, [load]);
   const totals = useMemo(() => stats, [stats]);
 
   return (
@@ -194,9 +222,18 @@ export default function App() {
                 <option value="oldest">Älteste zuerst</option>
                 <option value="confidence">Konfidenz</option>
               </select>
+              <button
+                className="ghost"
+                onClick={triggerRun}
+                disabled={runBusy}
+                title="CT-Logs jetzt neu einlesen (collect → enrich → classify → changes)"
+              >
+                {runBusy ? "läuft …" : "⟳ Jetzt abrufen"}
+              </button>
               <span className="count">
                 {loading ? "lädt …" : `${rows.length} Treffer`}
               </span>
+              {runMsg ? <span className="count">{runMsg}</span> : null}
             </section>
 
             {error ? (
