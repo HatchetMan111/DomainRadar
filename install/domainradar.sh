@@ -177,7 +177,8 @@ require_host_prereqs() {
 }
 
 find_ct_by_hostname() {
-  pct list 2>/dev/null | awk -v h="$CT_HOSTNAME" 'NR>1 && $2==h {print $1; exit}'
+  # pct list: "VMID Status Lock Name" – der Hostname steht im LETZTEN Feld
+  pct list 2>/dev/null | awk -v h="$CT_HOSTNAME" 'NR>1 && $NF==h {print $1; exit}'
 }
 
 next_free_ctid() {
@@ -190,9 +191,43 @@ next_free_ctid() {
 }
 
 pick_storage() {
-  if [ -n "$CT_STORAGE" ]; then echo "$CT_STORAGE"; return; fi
-  pvesm status 2>/dev/null | awk -F'[[:space:]]+' '$NF=="rootdir" {print $1; exit}' | head -1 \
-    || echo "local-lvm"
+  # 1) explizit per --storage vorgegeben → Existenz gegen pvesm prüfen
+  if [ -n "$CT_STORAGE" ]; then
+    if pvesm status 2>/dev/null | awk '{print $1}' | grep -qx -- "$CT_STORAGE"; then
+      echo "$CT_STORAGE"
+      return
+    fi
+    die "Storage '$CT_STORAGE' existiert nicht auf diesem Host – bitte --storage korrigieren (pvesm status)"
+  fi
+
+  local storage="" cfg="${PVE_STORAGE_CFG:-/etc/pve/storage.cfg}"
+
+  # 2) /etc/pve/storage.cfg lesen: erstes Storage mit content=rootdir.
+  #    WICHTIG: pvesm status hat KEINE Content-Spalte – dort steht nie
+  #    "rootdir" im letzten Feld (nur Name Type Status Total Used Avail %).
+  if [ -r "$cfg" ]; then
+    storage="$(awk '
+      /^[^[:space:]#]/ { name = $2 }
+      /^[[:space:]]*content/ && name != "" {
+        n = split($2, a, ",")
+        for (i = 1; i <= n; i++) if (a[i] == "rootdir") { print name; found = 1; exit }
+      }
+    ' "$cfg")"
+  fi
+
+  # 3) Fallback: aktives Storage eines container-tauglichen Typs aus
+  #    pvesm status, Block-Storage-Typen vor reinem dir bevorzugt
+  if [ -z "$storage" ]; then
+    storage="$(pvesm status 2>/dev/null | awk '
+      $3 == "active" {
+        if ($2 ~ /^(lvmthin|lvm|zfspool|zfs|rbd|cephfs|nfs|cifs|btrfs|iscsi|iscsidirect|drbd)$/) { print $1; ok = 1; exit }
+        if ($2 == "dir" && d == "") d = $1
+      }
+      END { if (!ok && d != "") print d }')"
+  fi
+
+  # 4) letzter Fallback: klassischer PVE-Default
+  echo "${storage:-local-lvm}"
 }
 
 pick_template() {
@@ -269,13 +304,16 @@ do_install() {
 
   ctid="${CT_ID:-$(next_free_ctid)}"
   CT_ID="$ctid"  # für on_error sichtbar
+  [[ "$ctid" =~ ^[0-9]+$ ]] || die "Ungültige Container-ID: '$ctid'"
+  [[ "$CT_ROOTFS" =~ ^[0-9]+$ ]] || die "Ungültige Diskgröße in GB: '$CT_ROOTFS'"
   storage="$(pick_storage)"
+  [ -n "$storage" ] || die "Kein geeignetes Storage gefunden – bitte --storage <name> angeben"
   template="${CT_TEMPLATE:-$(pick_template)}"
 
   if [ "$MODE" = "update" ]; then
     msg_info "Aktualisiere Container $ctid"
   else
-    msg_info "Erstelle Container $ctid"
+    msg_info "Erstelle Container $ctid (Storage: $storage, rootfs ${CT_ROOTFS} GB)"
     pct create "$ctid" "$template" \
       --hostname "$CT_HOSTNAME" \
       --cores "$CT_CORES" \
