@@ -14,7 +14,7 @@ aus, ruft die neuen Webseiten ab und ordnet ein, was sie anbieten und wer sie be
 ## 🚀 Installation (Einzeiler, auf dem Proxmox-Host als root)
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DomainRadar-Proxmox/main/install/domainradar.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DomainRadar/main/install/domainradar.sh)"
 ```
 
 ### Was passiert
@@ -29,13 +29,21 @@ bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DomainRad
 | Web-UI | `http://<CT-IP>:8477` |
 | Update | `--update` erkennt den Container am Hostnamen |
 
-Mit **Ollama** (lokales LLM für die Klassifikation):
+Mit **Ollama** (lokales LLM für die Klassifikation) direkt mitinstallieren:
 
 ```bash
-OLLAMA=1 bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DomainRadar-Proxmox/main/install/domainradar.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/HatchetMan111/DomainRadar/main/install/domainradar.sh)" --ollama
 ```
 
-Das dimensioniert den Container auf 4 vCPU / 8 GB / 24 GB hoch.
+Das dimensioniert den Container auf 4 vCPU / 8 GB / 24 GB hoch und lädt
+`llama3.2:3b` herunter. Ohne `--ollama` läuft die Klassifikation regelbasiert,
+die Oberfläche bleibt aber voll nutzbar.
+
+Optionen hinter dem schließenden Anführungszeichen:
+
+```bash
+...domainradar.sh --id 250 --memory 8192 --cores 4 --ollama --port 8477
+```
 
 ---
 
@@ -60,14 +68,23 @@ bash -c "$(wget -qLO - .../install/domainradar.sh)" -- --debug
 
 | Option | Bedeutung |
 |---|---|
-| `--ctid <id>` | Container-ID fest vorgeben |
+| `--id <id>` | Container-ID fest vorgeben (Alias: `--ctid`) |
+| `--hostname <name>` | Hostname im Container (Default: `domainradar`) |
+| `--cores <n>` | vCPU-Kerne (Default: 2) |
+| `--memory <mb>` | RAM in MB (Default: 2048) |
+| `--swap <mb>` | Swap in MB (Default: 512) |
+| `--rootfs <gb>` | Disk in GB (Default: 8) |
+| `--storage <name>` | Storage-Pool (Default: `local-lvm`) |
+| `--bridge <name>` | Bridge (Default: `vmbr0`) |
+| `--ip <cidr>` | Statische IP statt DHCP |
+| `--port <n>` | Web-Port (Default: 8477) |
 | `--update` | vorhandenen Container aktualisieren |
 | `--status` | Status und URL anzeigen |
 | `--uninstall [--yes]` | Container löschen |
 | `--cron` | cron statt systemd-Timern |
 | `--no-ollama` | Ollama nicht installieren (Default) |
 | `--ollama` | Ollama installieren, Container hochdimensionieren |
-| `--debug` | `bash -x` im Inner-Skript, vollständige Fehlkette |
+| `--debug` | `bash -x`, vollständige Fehlkette inkl. Container-Logs |
 
 ### Umgebungsvariablen
 
