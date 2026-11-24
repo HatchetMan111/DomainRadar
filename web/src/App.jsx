@@ -46,6 +46,10 @@ export default function App() {
   const [detail, setDetail] = useState(null);
   const [runBusy, setRunBusy] = useState(false);
   const [runMsg, setRunMsg] = useState("");
+  const [days, setDays] = useState(null);
+  const [checkQ, setCheckQ] = useState("");
+  const [checkBusy, setCheckBusy] = useState(false);
+  const [checkMsg, setCheckMsg] = useState("");
 
   useEffect(() => {
     api
@@ -67,6 +71,7 @@ export default function App() {
         q: q || undefined,
         category: category || undefined,
         sort,
+        days: days || undefined,
         limit: 200,
       });
       setRows(res.hits || []);
@@ -76,7 +81,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [view, q, category, sort]);
+  }, [view, q, category, sort, days]);
 
   // Debounce, damit Tippen keine Abfragekaskade auslöst.
   useEffect(() => {
@@ -120,6 +125,41 @@ export default function App() {
       setRunMsg(`Fehler: ${e.message}`);
     }
   }, [load]);
+  const checkSubmit = useCallback(async () => {
+    const d = checkQ.trim();
+    if (!d || checkBusy) return;
+    setCheckBusy(true);
+    setCheckMsg("");
+    try {
+      const res = await api.check(d);
+      setCheckMsg(`${res.domain}: Abruf + Einordnung laufen …`);
+      openDomain(res.domain);
+      let tries = 0;
+      const timer = setInterval(async () => {
+        tries += 1;
+        try {
+          const det = await api.domain(res.domain);
+          setDetail(det);
+          if (det.classified_at || tries > 40) {
+            clearInterval(timer);
+            setCheckBusy(false);
+            setCheckMsg(
+              det.classified_at
+                ? "Fertig – Details geöffnet."
+                : "Abruf fertig, Klassifikation läuft noch (Timer 03:00 oder „Jetzt abrufen“).",
+            );
+            load();
+            api.stats().then(setStats).catch(() => {});
+          }
+        } catch {
+          /* Domain noch nicht in der DB – nächster Tick */
+        }
+      }, 3000);
+    } catch (e) {
+      setCheckBusy(false);
+      setCheckMsg(`Fehler: ${e.message}`);
+    }
+  }, [checkQ, checkBusy, openDomain, load]);
   const totals = useMemo(() => stats, [stats]);
 
   return (
@@ -201,6 +241,23 @@ export default function App() {
                 className="search"
                 aria-label="Suche"
               />
+              <input
+                type="text"
+                placeholder="Adresse direkt prüfen (z. B. muster.de) …"
+                value={checkQ}
+                onChange={(e) => setCheckQ(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && checkSubmit()}
+                className="search"
+                aria-label="Domain direkt prüfen"
+              />
+              <button
+                className="ghost"
+                onClick={checkSubmit}
+                disabled={checkBusy || !checkQ.trim()}
+                title="Domain wird jetzt abgerufen und eingeordnet"
+              >
+                {checkBusy ? "prüft …" : "Prüfen"}
+              </button>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
@@ -222,6 +279,18 @@ export default function App() {
                 <option value="oldest">Älteste zuerst</option>
                 <option value="confidence">Konfidenz</option>
               </select>
+              <span className="daychips" aria-label="Zeitraum">
+                {[null, 1, 7, 30].map((d) => (
+                  <button
+                    key={d === null ? "all" : d}
+                    className={days === d ? "chip active" : "chip"}
+                    onClick={() => setDays(d)}
+                  >
+                    {d === null ? "alle" : d === 1 ? "24 h" : `${d} Tage`}
+                  </button>
+                ))}
+              </span>
+              {checkMsg ? <span className="count">{checkMsg}</span> : null}
               <button
                 className="ghost"
                 onClick={triggerRun}
