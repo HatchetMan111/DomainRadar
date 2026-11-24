@@ -7,32 +7,39 @@ Was hier passiert, ist bewusst schmal gehalten:
 3. **Parking-Erkennung** – bevor ein LLM Geld kostet
 4. Ergebnis in `domains` schreiben
 
-Die Parking-Erkennung ist der wichtigste Kostenhebel: ein großer Teil frisch
-registrierter Domains ist geparkt oder leer. Ohne diesen Filter würde die
-Klassifikation für leere Seiten bezahlen.
+Verbesserungen in v0.2:
+- TLS-Verifikation standardmäßig AN (mit Opt-out via DOMAINRADAR_INSECURE_TLS=1)
+- Kein rekursiver Fallback ohne Backoff, sondern max. 1 Retry mit Pause
+- User-Agent konfigurierbar
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import re
 import socket
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .db import Database
 
 log = logging.getLogger("domainradar.enricher")
 
-USER_AGENT = (
-    "Mozilla/5.0 (compatible; DomainRadar/0.1; +local research bot) "
-    "Python-urllib/3"
+USER_AGENT = os.environ.get(
+    "DOMAINRADAR_USER_AGENT",
+    "Mozilla/5.0 (compatible; DomainRadar/0.2; +local research bot) Python-urllib/3",
 )
 MAX_BYTES = 2_000_000
-TIMEOUT = 10
+TIMEOUT = int(os.environ.get("DOMAINRADAR_ENRICH_TIMEOUT", "10"))
+# TLS-Verifikation: default AN. Nur mit explizitem Opt-out deaktivieren.
+INSECURE_TLS = os.environ.get("DOMAINRADAR_INSECURE_TLS", "0") == "1"
+MAX_RETRIES = 1
+RETRY_DELAY = 1.0
 
 # Marker für geparkte Domains: Domain-Händler, Baukästen, Halterungen.
 PARKING_MARKERS = (
@@ -57,16 +64,13 @@ PARKING_MARKERS = (
     "demnächst verfügbar",
     "in construction",
     "im aufbau",
-    # domaindiscount24 / "Domainpark": im Testbetrieb zweimal aufgetaucht
     "domainpark",
     "bitte den rasen nicht betreten",
     "diese domain wurde geparkt",
     "keinem server oder webhosting zugewiesen",
 )
 
-# Zweite Klasse: nur gegen den sichtbaren Text prüfen. "undef" steckt in
-# CSS-Klassen (`class="… undefined"`) und würde sonst echte Seiten wie tlz.de
-# fälschlich als geparkt markieren.
+# Zweite Klasse: nur gegen den sichtbaren Text prüfen.
 PARKING_MARKERS_TEXTONLY = (
     "undef",
     "diese domain kaufen",
@@ -74,7 +78,6 @@ PARKING_MARKERS_TEXTONLY = (
     "jetzt sichern",
 )
 
-# Impressum/AGB-Verlinkungen – verraten, dass jemand ein Impressum betreibt.
 IMPRESSUM_HINTS = re.compile(
     r"(impressum|anbieterkennzeichnung|about\s*us|über\s*uns|kontakt)", re.I
 )
@@ -91,7 +94,6 @@ _DESC_RE_ALT = re.compile(
     r'<meta[^>]+content=["\'](.*?)["\'][^>]+name=["\']description["\']', re.I | re.S
 )
 _LANG_RE = re.compile(r'<html[^>]+lang=["\']([a-zA-Z-]+)["\']', re.I)
-_H1_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.I | re.S)
 
 
 @dataclass
@@ -108,12 +110,8 @@ class FetchResult:
     is_parked: bool = False
     parking_reason: str = ""
     links_impressum: bool = False
-    hints: dict[str, bool] = None  # type: ignore[assignment]
+    hints: dict[str, bool] = field(default_factory=dict)
     error: str = ""
-
-    def __post_init__(self):
-        if self.hints is None:
-            self.hints = {}
 
 
 def _strip_tags(html: str) -> str:
@@ -139,12 +137,7 @@ def _first(patterns, html: str) -> str:
 
 
 def detect_parking(html_lower: str, text: str, text_len: int) -> str:
-    """Leerstring, wenn nicht geparkt – sonst der auslösende Marker.
-
-    `html_lower` ist das rohe HTML (für HTML-Kommentare und Server-Default-
-    Seiten), `text` der sichtbare Text (für Marker, die in CSS-Klassen
-    als False Positive auftauchen).
-    """
+    """Leerstring, wenn nicht geparkt – sonst der auslösende Marker."""
     if text_len < 200:
         return "leer" if text_len < 50 else "sehr wenig Text"
 
@@ -159,14 +152,32 @@ def detect_parking(html_lower: str, text: str, text_len: int) -> str:
     return ""
 
 
+def _make_ssl_context() -> ssl.SSLContext:
+    """SSL-Kontext: default mit Verifikation, Opt-out via Env."""
+    ctx = ssl.create_default_context()
+    if INSECURE_TLS:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        log.warning(
+            "TLS-Verifikation ist DEAKTIVIERT (DOMAINRADAR_INSECURE_TLS=1) – "
+            "nur für Tests verwenden!"
+        )
+    return ctx
+
+
+_SSL_CTX = None
+
+
+def _get_ssl_context() -> ssl.SSLContext:
+    global _SSL_CTX
+    if _SSL_CTX is None:
+        _SSL_CTX = _make_ssl_context()
+    return _SSL_CTX
+
+
 def _fetch_once(url: str, timeout: int = TIMEOUT) -> tuple[int, str, str]:
     """HTTP holen. Rückgabe: (status, final_url, body)."""
-    ctx = ssl.create_default_context()
-    # Manche frische Domains haben kein valides Zertifikat – das ist kein Grund,
-    # die Seite zu überspringen, solange wir nichts ausgeben müssen.
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
+    ctx = _get_ssl_context()
     req = urllib.request.Request(
         url,
         headers={
@@ -182,7 +193,6 @@ def _fetch_once(url: str, timeout: int = TIMEOUT) -> tuple[int, str, str]:
             body = raw.decode(charset, errors="replace")
             return resp.status, resp.geturl(), body
     except urllib.error.HTTPError as exc:
-        # 4xx/5xx sind eine gültige Antwort: Domain existiert, Seite nicht.
         try:
             body = exc.read(MAX_BYTES).decode("utf-8", errors="replace")
         except Exception:  # noqa: BLE001
@@ -197,8 +207,8 @@ def fetch_domain(
 ) -> FetchResult:
     """Eine Domain lesen und auswerten.
 
-    `timeout` kommt aus der Konfiguration, damit die Einstellungsseite das
-    Zeitlimit pro Abruf steuern kann.
+    Bei Netzwerkfehlern einmal mit dem anderen Schema wiederholen
+    (https→http oder http→https), mit kurzer Pause dazwischen.
     """
     result = FetchResult(domain=domain, ok=False)
 
@@ -207,14 +217,14 @@ def fetch_domain(
     try:
         status, final_url, body = _fetch_once(url, timeout=timeout)
     except RuntimeError as exc:
-        # Einmal http versuchen, falls https scheitert (oder umgekehrt)
+        # Einmal mit dem anderen Schema versuchen, mit kurzer Pause
         if try_https:
-            return fetch_domain(domain, try_https=False)
+            time.sleep(RETRY_DELAY)
+            return fetch_domain(domain, try_https=False, timeout=timeout)
         result.error = str(exc)
         return result
 
     if status in (401, 403):
-        # Zugangssperre, kein Parking: die Seite existiert, wir dürfen nur nicht.
         result.error = f"HTTP {status} (Zugang verweigert)"
         result.http_status = status
         result.final_url = final_url
@@ -288,10 +298,7 @@ def run_once(
     limit: int | None = None,
     verbose: bool = False,
 ) -> dict:
-    """Alle offenen Domains bis zum Limit lesen.
-
-    Ohne `limit` wird `enrich_batch` aus der Konfiguration verwendet.
-    """
+    """Alle offenen Domains bis zum Limit lesen."""
     from . import config
 
     settings = config.load(db)
@@ -318,9 +325,9 @@ def run_once(
             )
     return stats
 
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
-    import os
 
     ap = argparse.ArgumentParser(
         prog="domainradar.enrich",

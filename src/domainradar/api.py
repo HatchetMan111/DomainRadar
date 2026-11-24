@@ -3,19 +3,22 @@
 Read-only. Liefert die eigene `web/dist` als statisches Frontend aus und
 darunter die JSON-API.
 
-Sinnvolle Defaults: BIND ist `0.0.0.0`, damit die Web-UI aus dem LAN erreichbar
-ist. Das ist bewusst so – aber ohne Authentifizierung. Wer den Port nach außen
-öffnet, stellt eine öffentliche Beobachtungsdatenbank ins Netz. Der Installer
-weist darauf hin.
+Sicherheitshinweise:
+- Default-BIND ist `127.0.0.1` (nur lokal). Für LAN-Zugriff explizit
+  `DOMAINRADAR_HOST=0.0.0.0` setzen.
+- Optional: `DOMAINRADAR_API_TOKEN` in der Umgebung setzen, dann müssen
+  alle /api/*-Requests einen `Authorization: Bearer <token>`-Header senden.
+- CORS ist auf gleiche Origin beschränkt (kein Cross-Origin-Zugriff).
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import secrets
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,35 +30,74 @@ log = logging.getLogger("domainradar.api")
 
 DB_PATH = os.environ.get("DOMAINRADAR_DB", "/opt/domainradar/data/domainradar.db")
 WEB_DIST = Path(os.environ.get("DOMAINRADAR_WEB", "/opt/domainradar/web"))
-HOST = os.environ.get("DOMAINRADAR_HOST", "0.0.0.0")
+# Default auf 127.0.0.1 – sicherer. Für LAN: explizit 0.0.0.0 setzen.
+HOST = os.environ.get("DOMAINRADAR_HOST", "127.0.0.1")
 PORT = int(os.environ.get("DOMAINRADAR_PORT", "8477"))
+# Optionaler API-Token für Bearer-Auth (leer = keine Auth)
+API_TOKEN = os.environ.get("DOMAINRADAR_API_TOKEN", "").strip()
+
+
+def _check_auth(request: Request) -> None:
+    """Bearer-Token prüfen, falls DOMAINRADAR_API_TOKEN gesetzt ist.
+
+    Wenn kein Token konfiguriert ist, ist die API offen (nur für lokalen
+    Betrieb auf 127.0.0.1 gedacht). Mit Token: konstanter Vergleich via
+    secrets.compare_digest gegen Timing-Angriffe.
+    """
+    if not API_TOKEN:
+        return  # keine Auth konfiguriert
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization: Bearer <token> fehlt",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = header.removeprefix("Bearer ").strip()
+    if not secrets.compare_digest(token, API_TOKEN):
+        raise HTTPException(
+            status_code=403,
+            detail="Token ungültig",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def create_app(db_path: str = DB_PATH) -> FastAPI:
     app = FastAPI(
         title="DomainRadar",
         description="Lokaler Radar für neu beobachtete .de-Domains",
-        version="0.1.0",
+        version="0.2.0",
     )
+
+    # CORS: nur gleiche Origin (kein Cross-Origin). Für lokales Frontend
+    # reicht das; wer ein externes Frontend anbinden will, kann
+    # DOMAINRADAR_CORS_ORIGINS setzen.
+    cors_origins_env = os.environ.get("DOMAINRADAR_CORS_ORIGINS", "").strip()
+    allow_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()] if cors_origins_env else []
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["GET"],
-        allow_headers=["*"],
+        allow_origins=allow_origins,
+        allow_methods=["GET", "PUT", "POST"],
+        allow_headers=["Authorization", "Content-Type", "Accept"],
     )
 
     db = Database(db_path)
 
+    # ── API-Endpunkte (mit optionaler Auth) ──────────────────────────────
+
     @app.get("/api/health")
-    def health():
-        return {"status": "ok", "database": db_path}
+    def health(request: Request):
+        _check_auth(request)
+        return {"status": "ok", "database": db_path, "version": "0.2.0"}
 
     @app.get("/api/stats")
-    def stats():
+    def stats(request: Request):
+        _check_auth(request)
         return db.stats()
 
     @app.get("/api/startups")
     def startups(
+        request: Request,
         view: str = Query("market", pattern="^(market|leads)$"),
         country: str | None = None,
         category: str | None = None,
@@ -66,6 +108,7 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
         offset: int = Query(0, ge=0),
         sort: str = Query("newest", pattern="^(newest|oldest|confidence)$"),
     ):
+        _check_auth(request)
         result = db.search(
             view=view,
             country=country,
@@ -77,13 +120,13 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
             offset=offset,
             sort=sort,
         )
-        # Lesbare Form für IDNs ergänzen; `domain` bleibt der technische Key.
         for hit in result["hits"]:
             hit["display_name"] = display_name(hit["domain"])
         return result
 
     @app.get("/api/domain/{domain}")
-    def domain_detail(domain: str):
+    def domain_detail(request: Request, domain: str):
+        _check_auth(request)
         row = db.get_domain(domain)
         if row is None:
             raise HTTPException(status_code=404, detail="Domain unbekannt")
@@ -98,7 +141,8 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
         return {**data, "changes": [dict(c) for c in changes]}
 
     @app.get("/api/changes")
-    def changes(limit: int = Query(100, ge=1, le=500)):
+    def changes(request: Request, limit: int = Query(100, ge=1, le=500)):
+        _check_auth(request)
         rows = db.conn.execute(
             """SELECT domain, kind, detected_at, detail FROM changes
                 ORDER BY detected_at DESC LIMIT ?""",
@@ -107,7 +151,8 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
         return {"hits": [dict(r) for r in rows]}
 
     @app.get("/api/categories")
-    def categories():
+    def categories(request: Request):
+        _check_auth(request)
         rows = db.conn.execute(
             """SELECT category, COUNT(*) AS count FROM domains
                 WHERE category IS NOT NULL GROUP BY category ORDER BY count DESC"""
@@ -117,8 +162,8 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
     # ---------- Einstellungen ----------
 
     @app.get("/api/settings")
-    def get_settings():
-        """Wirksame Konfiguration – Geheimnisse maskiert."""
+    def get_settings(request: Request):
+        _check_auth(request)
         from . import config
 
         settings = config.load(db)
@@ -130,13 +175,8 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
         }
 
     @app.put("/api/settings")
-    def put_settings(payload: dict):
-        """Einstellungen speichern.
-
-        Bewusst ein `PUT` mit vollständigem Objekt: so kann die Oberfläche
-        einen leeren Wert mitschicken, ohne dass ein Teil-Update mehrere
-        Schreibzugriffe braucht.
-        """
+    def put_settings(request: Request, payload: dict):
+        _check_auth(request)
         from . import config
 
         if not isinstance(payload, dict):
@@ -154,12 +194,8 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
         }
 
     @app.post("/api/settings/test")
-    def test_setting(payload: dict):
-        """Verbindung zu einem Provider prüfen.
-
-        Ein echter Minimal-Call, kein Port-Check: ein offener Port sagt nichts
-        darüber, ob Modell und Endpunkt zusammenpassen.
-        """
+    def test_setting(request: Request, payload: dict):
+        _check_auth(request)
         from . import config
 
         provider = str(payload.get("provider", "")).strip().lower()
@@ -168,8 +204,6 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
                 status_code=422, detail="provider muss 'ollama' oder 'openrouter' sein"
             )
 
-        # Noch nicht gespeicherte Werte mitverwenden, damit man testen kann,
-        # bevor man speichert.
         settings = config.load(db)
         for key, value in (payload.get("values") or {}).items():
             if key in config.DEFAULTS and value is not None:
@@ -177,10 +211,11 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
 
         return config.test_connection(provider, settings)
 
-    # ---------- Feed ----------
+    # ---------- Feed & Export ----------
 
     @app.get("/feed.xml", response_class=PlainTextResponse)
-    def feed():
+    def feed(request: Request):
+        _check_auth(request)
         rows = db.conn.execute(
             """SELECT domain, title, summary_de, first_seen FROM domains
                 WHERE title IS NOT NULL
@@ -209,7 +244,8 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
         return PlainTextResponse(body, media_type="application/rss+xml")
 
     @app.get("/export/leads.csv", response_class=PlainTextResponse)
-    def export_leads():
+    def export_leads(request: Request):
+        _check_auth(request)
         rows = db.search(view="leads", limit=500)
         lines = ["domain;title;category;segment;company_name;legal_form;first_seen"]
         for r in rows["hits"]:
@@ -231,6 +267,13 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
             "\n".join(lines), media_type="text/csv; charset=utf-8"
         )
 
+    @app.get("/export/leads.json")
+    def export_leads_json(request: Request):
+        """Leads als JSON – maschinenlesbar für CRM-Import."""
+        _check_auth(request)
+        rows = db.search(view="leads", limit=500)
+        return JSONResponse({"leads": rows["hits"], "total": rows["total"]})
+
     # ---------- Statisches Frontend ----------
 
     dist = _resolve_web_dist()
@@ -246,7 +289,6 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
 
         @app.get("/{path:path}")
         def spa(path: str):
-            # SPA-Fallback: unbekannte Pfade an die App geben
             candidate = dist / path
             if candidate.is_file():
                 return FileResponse(str(candidate))
@@ -260,6 +302,7 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
                 {
                     "app": "DomainRadar",
                     "status": "ok",
+                    "version": "0.2.0",
                     "hint": "Web-Build fehlt. Bitte 'npm ci && npm run build' in web/ ausführen.",
                     "api": "/api/startups",
                 }
@@ -269,24 +312,18 @@ def create_app(db_path: str = DB_PATH) -> FastAPI:
 
 
 def _resolve_web_dist() -> Path | None:
-    """Web-Build finden, ohne auf einen festen Installationspfad zu bestehen.
-
-    Reihenfolge: Umgebungsvariable, Installationspfad, Repo-relative `web/dist`.
-    So läuft die API sowohl im LXC als auch in der Entwicklung.
-    """
+    """Web-Build finden, ohne auf einen festen Installationspfad zu bestehen."""
     env_web = os.environ.get("DOMAINRADAR_WEB")
     candidates = []
     if env_web:
         candidates.append(Path(env_web))
     here = Path(__file__).resolve()
-    # src/domainradar/api.py → Projektwurzel ist zwei Ebenen höher
     candidates.append(here.parent.parent.parent / "web" / "dist")
     candidates.append(Path("/opt/domainradar/web/dist"))
 
     for cand in candidates:
         if (cand / "index.html").exists():
             return cand
-    # Fallback: Verzeichnis mit dem Build ausgeben, auch wenn index.html fehlt
     for cand in candidates:
         if cand.exists():
             return cand
@@ -303,11 +340,7 @@ def _xml_escape(text: str) -> str:
 
 
 def create_app_for_env() -> FastAPI:
-    """App mit Umgebungsvariablen bauen – für `uvicorn domainradar.api:app`.
-
-    Bewusst erst beim Aufruf: so lässt sich das Modul importieren und testen,
-    ohne dass ein Verzeichnis unter /opt existieren muss.
-    """
+    """App mit Umgebungsvariablen bauen – für `uvicorn domainradar.asgi:app`."""
     return create_app(DB_PATH)
 
 
@@ -315,6 +348,11 @@ def main() -> None:
     import uvicorn
 
     logging.basicConfig(level=logging.INFO)
+    if HOST == "0.0.0.0" and not API_TOKEN:
+        log.warning(
+            "API bindet an 0.0.0.0 ohne Authentifizierung (DOMAINRADAR_API_TOKEN leer). "
+            "Nur im vertrauenswürdigen LAN betreiben oder Token setzen."
+        )
     uvicorn.run(create_app(DB_PATH), host=HOST, port=PORT, log_level="info")
 
 

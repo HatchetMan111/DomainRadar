@@ -1,8 +1,36 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Component, useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
 import DomainTable from "./DomainTable.jsx";
 import DomainDetail from "./DomainDetail.jsx";
 import Settings from "./Settings.jsx";
+
+// Error Boundary: fängt Render-Fehler ab, damit die UI nicht weiß bleibt.
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error("UI-Fehler:", error, info.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="error" style={{ margin: "40px auto", maxWidth: 600 }}>
+          <strong>Etwas ist schiefgelaufen.</strong>
+          <p>{String(this.state.error.message || this.state.error)}</p>
+          <button className="ghost" onClick={() => this.setState({ error: null })}>
+            Erneut versuchen
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function App() {
   const [page, setPage] = useState("radar");
@@ -64,118 +92,136 @@ export default function App() {
     }
   }, []);
 
-  const totals = useMemo(() => {
-    if (!stats) return null;
-    return stats;
-  }, [stats]);
+  const totals = useMemo(() => stats, [stats]);
 
   return (
-    <div className="app">
-      <header className="head">
-        <div>
-          <h1>DomainRadar</h1>
-          <p className="sub">
-            Neu beobachtete .de-Domains aus Certificate-Transparency-Logs.
-            Vollständig lokal.
-          </p>
-        </div>
-
-        <nav className="views" aria-label="Bereich">
-          <button
-            className={page === "radar" ? "tab active" : "tab"}
-            onClick={() => setPage("radar")}
-            aria-current={page === "radar"}
-          >
-            Radar
-          </button>
-          <button
-            className={page === "settings" ? "tab active" : "tab"}
-            onClick={() => setPage("settings")}
-            aria-current={page === "settings"}
-          >
-            Einstellungen
-          </button>
-        </nav>
-      </header>
-
-      {page === "settings" ? (
-        <Settings />
-      ) : (
-        <>
-          <div className="views views-sub" role="tablist" aria-label="Ansicht">
-            <button
-              className={view === "market" ? "tab active" : "tab"}
-              onClick={() => setView("market")}
-              role="tab"
-              aria-selected={view === "market"}
-            >
-              Markt
-            </button>
-            <button
-              className={view === "leads" ? "tab active" : "tab"}
-              onClick={() => setView("leads")}
-              role="tab"
-              aria-selected={view === "leads"}
-            >
-              Leads
-            </button>
+    <ErrorBoundary>
+      <div className="app">
+        <header className="head">
+          <div>
+            <h1>DomainRadar</h1>
+            <p className="sub">
+              Neu beobachtete .de-Domains aus Certificate-Transparency-Logs.
+              Vollständig lokal.
+            </p>
           </div>
 
-          {totals ? (
-            <section className="cards">
-              <Card label="Domains gesamt" value={fmtNum(totals.total_domains)} />
-              <Card label="neu (24 h)" value={fmtNum(totals.new_24h)} />
-              <Card label="neu (7 Tage)" value={fmtNum(totals.new_7d)} />
-              <Card label="eingeordnet" value={fmtNum(totals.classified)} />
-              <Card label="mit Produkt" value={fmtNum(totals.with_product)} />
-              <Card label="geparkt" value={fmtNum(totals.parked)} />
+          <nav className="views" aria-label="Bereich">
+            <button
+              className={page === "radar" ? "tab active" : "tab"}
+              onClick={() => setPage("radar")}
+              aria-current={page === "radar"}
+            >
+              Radar
+            </button>
+            <button
+              className={page === "settings" ? "tab active" : "tab"}
+              onClick={() => setPage("settings")}
+              aria-current={page === "settings"}
+            >
+              Einstellungen
+            </button>
+          </nav>
+        </header>
+
+        {page === "settings" ? (
+          <Settings />
+        ) : (
+          <>
+            <div className="views views-sub" role="tablist" aria-label="Ansicht">
+              <button
+                className={view === "market" ? "tab active" : "tab"}
+                onClick={() => setView("market")}
+                role="tab"
+                aria-selected={view === "market"}
+              >
+                Markt
+              </button>
+              <button
+                className={view === "leads" ? "tab active" : "tab"}
+                onClick={() => setView("leads")}
+                role="tab"
+                aria-selected={view === "leads"}
+              >
+                Leads
+              </button>
+            </div>
+
+            {totals ? (
+              <section className="cards">
+                <Card label="Domains gesamt" value={fmtNum(totals.total_domains)} />
+                <Card label="neu (24 h)" value={fmtNum(totals.new_24h)} />
+                <Card label="neu (7 Tage)" value={fmtNum(totals.new_7d)} />
+                <Card label="eingeordnet" value={fmtNum(totals.classified)} />
+                <Card label="mit Produkt" value={fmtNum(totals.with_product)} />
+                <Card label="geparkt" value={fmtNum(totals.parked)} />
+                {totals.pending_fetch > 0 ? (
+                  <Card label="offen (Abruf)" value={fmtNum(totals.pending_fetch)} />
+                ) : null}
+                {totals.pending_classify > 0 ? (
+                  <Card label="offen (Klass.)" value={fmtNum(totals.pending_classify)} />
+                ) : null}
+              </section>
+            ) : null}
+
+            <section className="filters">
+              <input
+                type="search"
+                placeholder="Domain oder Titel suchen …"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                className="search"
+                aria-label="Suche"
+              />
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                aria-label="Kategorie"
+              >
+                <option value="">Alle Kategorien</option>
+                {categories.map((c) => (
+                  <option key={c.category} value={c.category}>
+                    {c.category} ({c.count})
+                  </option>
+                ))}
+              </select>
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value)}
+                aria-label="Sortierung"
+              >
+                <option value="newest">Neueste zuerst</option>
+                <option value="oldest">Älteste zuerst</option>
+                <option value="confidence">Konfidenz</option>
+              </select>
+              <span className="count">
+                {loading ? "lädt …" : `${rows.length} Treffer`}
+              </span>
             </section>
-          ) : null}
 
-          <section className="filters">
-            <input
-              type="search"
-              placeholder="Domain oder Titel suchen …"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              className="search"
-            />
-            <select value={category} onChange={(e) => setCategory(e.target.value)}>
-              <option value="">Alle Kategorien</option>
-              {categories.map((c) => (
-                <option key={c.category} value={c.category}>
-                  {c.category} ({c.count})
-                </option>
-              ))}
-            </select>
-            <select value={sort} onChange={(e) => setSort(e.target.value)}>
-              <option value="newest">Neueste zuerst</option>
-              <option value="oldest">Älteste zuerst</option>
-              <option value="confidence">Konfidenz</option>
-            </select>
-            <span className="count">
-              {loading ? "lädt …" : `${rows.length} Treffer`}
-            </span>
-          </section>
+            {error ? (
+              <p className="error" role="alert">
+                Fehler: {error}
+              </p>
+            ) : null}
 
-          {error ? <p className="error">Fehler: {error}</p> : null}
+            <main>
+              <DomainTable rows={rows} view={view} onOpen={openDomain} />
+            </main>
 
-          <main>
-            <DomainTable rows={rows} view={view} onOpen={openDomain} />
-          </main>
+            {detail ? (
+              <DomainDetail data={detail} onClose={() => setDetail(null)} />
+            ) : null}
+          </>
+        )}
 
-          {detail ? (
-            <DomainDetail data={detail} onClose={() => setDetail(null)} />
-          ) : null}
-        </>
-      )}
-
-      <footer className="foot">
-        Quelle: öffentliche Certificate-Transparency-Logs. „Zuerst gesehen“ =
-        erstes Zertifikat, nicht Registrierungsdatum. Geparkte Domains ohne
-        HTTPS fehlen.
-      </footer>
-    </div>
+        <footer className="foot">
+          Quelle: öffentliche Certificate-Transparency-Logs. „Zuerst gesehen“ =
+          erstes Zertifikat, nicht Registrierungsdatum. Geparkte Domains ohne
+          HTTPS fehlen.
+        </footer>
+      </div>
+    </ErrorBoundary>
   );
 }
 

@@ -4,8 +4,12 @@ Eine Datei, ein Writer, WAL-Mode. Kein Serverdienst – Backup ist `vzdump` bzw.
 eine Datei-Kopie.
 
 Das Schema ist absichtlich flach: alles, was ein Filter oder eine Aggregation
-braucht, steht als eigene Spalte bereit. So bleibt die API ein einfacher
-SQL-Query statt eines Joins über halb normalisierte Tabellen.
+braucht, steht als eigene Spalte bereit.
+
+Verbesserungen in v0.2:
+- Zusätzliche Indexes für häufige Abfragen (fetched_at, classified_at)
+- SQL-Parameter gebunden statt f-string in search()
+- VACUUM/ANALYZE helper für Wartung
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -55,7 +59,7 @@ CREATE TABLE IF NOT EXISTS domains (
   first_log         TEXT,
   country           TEXT,
   last_cert_at      TEXT,
-  -- Abrieb
+  -- Abruf
   is_parked         INTEGER NOT NULL DEFAULT 0,
   http_status       INTEGER,
   final_url         TEXT,
@@ -86,6 +90,10 @@ CREATE TABLE IF NOT EXISTS domains (
 CREATE INDEX IF NOT EXISTS idx_domains_seen    ON domains(first_seen);
 CREATE INDEX IF NOT EXISTS idx_domains_class   ON domains(category, segment);
 CREATE INDEX IF NOT EXISTS idx_domains_country ON domains(country);
+-- Neu in v0.2: Indexes für Enricher/Classifier-Queries
+CREATE INDEX IF NOT EXISTS idx_domains_fetch_pending ON domains(http_status) WHERE http_status IS NULL;
+CREATE INDEX IF NOT EXISTS idx_domains_classify_pending ON domains(classified_at) WHERE classified_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_domains_fetched ON domains(fetched_at);
 
 CREATE TABLE IF NOT EXISTS changes (
   id          INTEGER PRIMARY KEY,
@@ -152,6 +160,7 @@ class Database:
     def _init_schema(self) -> None:
         with self.transaction() as con:
             con.executescript(SCHEMA)
+            # Schema-Version aktualisieren (Migrationen können hier ansetzen)
             con.execute(
                 "INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -165,7 +174,7 @@ class Database:
             yield conn
             conn.commit()
         except Exception:
-            conn.cancel()
+            conn.rollback()
             raise
 
     def close(self) -> None:
@@ -173,6 +182,14 @@ class Database:
         if conn is not None:
             conn.close()
             self._local.conn = None
+
+    def vacuum(self) -> None:
+        """Datenbank komprimieren (nach großen Löschoperationen sinnvoll)."""
+        self.conn.execute("VACUUM")
+
+    def analyze(self) -> None:
+        """Query-Pläne aktualisieren (nach Schema-Updates sinnvoll)."""
+        self.conn.execute("ANALYZE")
 
     # ---------- Logs ----------
 
@@ -187,7 +204,6 @@ class Database:
         return int(row["id"])
 
     def get_log_progress(self, log_name: str) -> tuple[int, str]:
-        """Liefert (tree_size, state) eines Logs."""
         row = self.conn.execute(
             "SELECT tree_size, state FROM logs WHERE name=?", (log_name,)
         ).fetchone()
@@ -209,8 +225,14 @@ class Database:
 
     # ---------- Zertifikate ----------
 
-    def record_certs(self, log_id: int, rows: list[tuple[int, str, list[str], str, str]]) -> int:
-        """Mehrere Zertifikate einfügen. Rückgabe: Anzahl neuer Zeilen."""
+    def record_certs(self, log_id: int, rows: list[tuple]) -> int:
+        """Mehrere Zertifikate einfügen (Batch). Rückgabe: Anzahl neuer Zeilen.
+
+        `rows` ist eine Liste von Tupeln:
+        (log_id, cert_index, not_before, not_after, sans_json, seen_at)
+        """
+        if not rows:
+            return 0
         with self.transaction() as con:
             before = con.total_changes
             con.executemany(
@@ -223,24 +245,17 @@ class Database:
 
     def first_cert_index(self, domain: str) -> int | None:
         row = self.conn.execute(
-            """SELECT c.cert_index, c.seen_at, l.name
-                 FROM certs c JOIN logs l ON l.id = c.log_id
+            """SELECT c.cert_index FROM certs c
                  JOIN json_each(c.sans) j ON j.value = ?
                 ORDER BY c.seen_at ASC LIMIT 1""",
             (domain,),
         ).fetchone()
-        if row is None:
-            return None
-        return int(row["cert_index"])
+        return int(row["cert_index"]) if row else None
 
     # ---------- Domains ----------
 
     def insert_domains(self, entries: list[dict[str, Any]]) -> int:
-        """Neue Basis-Domains einfügen, bestehende unverändert lassen.
-
-        Rückgabe: Anzahl tatsächlich neuer Zeilen – damit kann der Collector
-        melden, wie viel er gefunden hat.
-        """
+        """Neue Basis-Domains einfügen (Batch). Rückgabe: Anzahl neuer Zeilen."""
         if not entries:
             return 0
         stamp = now_iso()
@@ -289,16 +304,9 @@ class Database:
 
     def update_fetch(self, domain: str, **fields: Any) -> None:
         allowed = {
-            "is_parked",
-            "http_status",
-            "final_url",
-            "title",
-            "meta_description",
-            "lang",
-            "page_hash",
-            "text_len",
-            "fetched_at",
-            "fetch_error",
+            "is_parked", "http_status", "final_url", "title",
+            "meta_description", "lang", "page_hash", "text_len",
+            "fetched_at", "fetch_error",
         }
         clean = {k: v for k, v in fields.items() if k in allowed}
         if not clean:
@@ -313,17 +321,9 @@ class Database:
 
     def update_classification(self, domain: str, **fields: Any) -> None:
         allowed = {
-            "category",
-            "segment",
-            "business_type",
-            "sells_own_product",
-            "confidence",
-            "summary_de",
-            "company_name",
-            "legal_form",
-            "contact_url",
-            "classify_provider",
-            "classify_model",
+            "category", "segment", "business_type", "sells_own_product",
+            "confidence", "summary_de", "company_name", "legal_form",
+            "contact_url", "classify_provider", "classify_model",
         }
         clean = {k: v for k, v in fields.items() if k in allowed}
         if not clean:
@@ -407,7 +407,9 @@ class Database:
             where.append("(domain LIKE ? OR COALESCE(title,'') LIKE ?)")
             params.extend([f"%{q}%", f"%{q}%"])
         if days:
-            where.append(f"first_seen >= datetime('now', '-{int(days)} days')")
+            # Parameter gebunden statt f-string (SQL-Injection-Schutz)
+            where.append("first_seen >= datetime('now', ?)")
+            params.append(f"-{int(days)} days")
 
         where_sql = " AND ".join(where)
 
@@ -430,7 +432,7 @@ class Database:
         return {"total": total, "hits": [dict(r) for r in rows]}
 
     def stats(self) -> dict[str, Any]:
-        """Kennzahlen für /stats."""
+        """Kennzahlen für /api/stats."""
 
         def scalar(sql: str, params: tuple = ()) -> Any:
             row = self.conn.execute(sql, params).fetchone()
@@ -442,19 +444,23 @@ class Database:
             "total_domains": scalar("SELECT COUNT(*) FROM domains") or 0,
             "new_24h": scalar(
                 "SELECT COUNT(*) FROM domains WHERE first_seen >= datetime('now','-1 day')"
-            )
-            or 0,
+            ) or 0,
             "new_7d": scalar(
                 "SELECT COUNT(*) FROM domains WHERE first_seen >= datetime('now','-7 day')"
-            )
-            or 0,
-            "classified": scalar("SELECT COUNT(*) FROM domains WHERE classified_at IS NOT NULL")
-            or 0,
+            ) or 0,
+            "classified": scalar(
+                "SELECT COUNT(*) FROM domains WHERE classified_at IS NOT NULL"
+            ) or 0,
             "parked": scalar("SELECT COUNT(*) FROM domains WHERE is_parked = 1") or 0,
             "with_product": scalar(
                 "SELECT COUNT(*) FROM domains WHERE sells_own_product = 1"
-            )
-            or 0,
+            ) or 0,
+            "pending_fetch": scalar(
+                "SELECT COUNT(*) FROM domains WHERE http_status IS NULL AND is_parked = 0"
+            ) or 0,
+            "pending_classify": scalar(
+                "SELECT COUNT(*) FROM domains WHERE classified_at IS NULL AND is_parked = 0 AND text_len > 400"
+            ) or 0,
             "by_category": [
                 dict(r)
                 for r in self.conn.execute(

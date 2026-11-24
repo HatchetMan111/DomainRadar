@@ -1,4 +1,13 @@
+# DomainRadar – Python-Dependencies
+# Direkte Abhängigkeiten gepinnt, transitive über pip-compile gehärtet.
+# Installation: pip install -r requirements.txt
+#
+# Für reproduzierbare Builds: pip-compile requirements.in > requirements.txt
+
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
 cryptography==44.0.0
 requests==2.32.3
+
+# Optional: Rate-Limiting für die API (ab v0.2 empfohlen)
+# slowapi==0.1.9
