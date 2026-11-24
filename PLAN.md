@@ -562,3 +562,49 @@ und der Zähler `NDOM`.
 | **OpenRouter-Key** | `~/.secrets/omnirouter-key` ist kein OpenRouter-Key (Beginn nicht `sk-or-`). Ohne Key bleibt Stufe 2 inaktiv. |
 | **Installation auf Proxmox** | Der Installer ist syntaktisch geprüft und im Harness gemockt, aber noch nicht auf einem echten Host gelaufen. Der nächste Schritt wäre genau das. |
 | **CT-Latenz** | Wie schnell erscheint ein Zertifikat nach der Registrierung? Die `spike.py`-Messung erfasst das, ist aber noch nicht über 24 h gelaufen. |
+## 14. Einstellungsseite (nachgerüstet 2026-11-24)
+
+Die Konfiguration lag zunächst nur in der `.env` — für einen Container mit
+Weboberfläche zu umständlich. Jetzt gibt es eine Seite dafür.
+
+**Rangfolge:** Datenbank (Oberfläche) → Umgebung (`.env`) → Default.
+Einmal in der Oberfläche gespeicherte Werte überschreiben also die Datei. Das
+ist der Punkt, an dem man sich sonst stundenlang sucht, warum eine `.env`-Änderung
+nichts bewirkt.
+
+**Warum die Oberfläche Vorrang hat:** die `.env` ist im Container versteckt und
+braucht einen `pct exec` + Neustart. Die Oberfläche ist der bequeme Weg, also
+darf sie auch gewinnen. Die Datei bleibt als Notausgang für alles, was man
+vor der ersten Anmeldung braucht.
+
+**14 Felder:**
+
+| Gruppe | Felder |
+|---|---|
+| LLM | Kaskade, Eskalationsschwelle, Ollama-URL, Ollama-Modell, OpenRouter-URL, OpenRouter-Modell, API-Key |
+| Erfassung | Max. Zertifikate/Lauf, Domains/Durchgang, HTTP-Timeout, robots.txt, Domains pro LLM-Aufruf |
+| Auswertung | Zielkategorien, Domains pro Änderungslauf |
+
+**Maskierung:** der API-Key wird als `sk**************t999` ausgeliefert. Ein
+leer gelassenes Feld beim Speichern lässt den alten Wert stehen — sonst würde
+jedes Speichern den Key löschen.
+
+**Verbindungstest:** ein echter Minimal-Call, kein Port-Check. Ein offener Port
+sagt nichts darüber, ob Modell und Endpunkt zusammenpassen. Vier Fälle:
+
+| Antwort | Bedeutung |
+|---|---|
+| „Verbindung steht – Antwort: OK" | Endpunkt + Modell passen |
+| „HTTP 404 (Modellname prüfen)" | Endpunkt richtig, Modell nicht vorhanden |
+| „HTTP 401 (API-Key falsch …)" | Key falsch oder abgelaufen |
+| „Nicht erreichbar (URLError …)" | Endpunkt läuft nicht |
+
+**Zwei Fallen, die dabei auftauchten:**
+
+1. `save()` meldete beim Speichern „13 Werte geändert", obwohl nur eines editiert
+   war — die Oberfläche schickt alle Felder mit. Jetzt vergleicht `save()` mit
+   dem alten Wert und meldet nur echte Änderungen.
+2. `chain_from_settings()` übergab leere Strings an `build_chain()`, das mit
+   `if env.get(...)` auf „nicht konfiguriert" prüfte. Folge: ein Provider wurde
+   stillschweigend übersprungen, obwohl er konfiguriert war. Jetzt werden leere
+   Werte durch die Defaults ersetzt.
